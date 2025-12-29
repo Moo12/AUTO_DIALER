@@ -1,0 +1,50 @@
+service:
+  # Google API credentials
+  pickle_file_path: "/path/to/your/token_sheets.pickle"
+  credentials_file_path: "/path/to/your/credentials.json"
+
+# Output Configuration
+files:
+  customers:
+    excel_workbooks:
+      intermidiate:
+        google_folder_id: "YOUR_GOOGLE_FOLDER_ID"
+        file_name_pattern: "INTERMEDIATE_{date}_{time}.xlsx"
+        output_folder_path: "./output"
+        google_wb_name: "לקוחות"
+      auto_dialer:
+        google_folder_id: "YOUR_GOOGLE_FOLDER_ID"
+        file_name_pattern: "DIALER_{date}_{time}.xlsx"
+        output_folder_path: "./output"
+        google_wb_name: "לקוחות"
+    input:
+      # Google Sheets ID - כוכביות פנויות
+      sheet_1:
+        wb_id: "YOUR_GOOGLE_SHEET_ID"
+        sheet_name: "גיליון1"
+        asterix_column_letter: "Y"
+      sheet_2:
+        wb_id: "YOUR_GOOGLE_SHEET_ID"
+        sheet_name: "לקוחות"
+        filter_column_letter: "AY"
+        asterix_column_letter: "F"
+        # Google Sheets ID - לוקחותלדוגים,
+  filter:
+    excel_workbooks:
+      filter:
+        google_folder_id: "YOUR_GOOGLE_FOLDER_ID"
+        file_name_pattern: "FILTER_{date}_{time}.xlsx"
+        google_wb_name: "פילטר"
+paycall:
+  account:  
+    email: "your_email@example.com"
+    password: "YOUR_PASSWORD"
+    paycall_id: "YOUR_PAYCALL_ID"
+  api_url: "http://ws.callindex.co.il/index.php"
+  limit: 9
+  order_by: "desc"
+  retry:
+    max_retries: 3
+    backoff_factor: 1.0
+    retryable_status_codes: [500, 502, 503, 504]
+    retry_on_timeout: true
