@@ -66,11 +66,28 @@ class ConfigManager:
             IOError: If file cannot be written
         """
         # Create backup before saving
-        backup_path = self.config_path.with_suffix('.yaml.bak')
+        # Use configurable backup directory (default: /tmp/config_backups)
+        backup_dir = os.getenv('CONFIG_BACKUP_DIR', '/tmp/config_backups')
+        os.makedirs(backup_dir, exist_ok=True)
+        
+        # Create backup filename with timestamp
+        from datetime import datetime
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        backup_filename = f"{self.config_path.stem}_{timestamp}.yaml.bak"
+        backup_path = Path(backup_dir) / backup_filename
+        
         if self.config_path.exists():
             import shutil
-            shutil.copy2(self.config_path, backup_path)
-            print(f"Backup created: {backup_path}", file=sys.stderr)
+            try:
+                shutil.copy2(self.config_path, backup_path)
+                print(f"Backup created: {backup_path}", file=sys.stderr)
+            except PermissionError as e:
+                print(f"Warning: Could not create backup in {backup_dir}: {e}", file=sys.stderr)
+                print(f"Attempting backup in /tmp instead...", file=sys.stderr)
+                # Fallback to /tmp if configured directory fails
+                backup_path = Path('/tmp') / backup_filename
+                shutil.copy2(self.config_path, backup_path)
+                print(f"Backup created: {backup_path}", file=sys.stderr)
         
         # Write updated config
         with open(self.config_path, 'w', encoding='utf-8') as f:
