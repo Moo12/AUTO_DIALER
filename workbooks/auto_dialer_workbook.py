@@ -50,10 +50,8 @@ class AutoDialerWorkbook(ExcelToGoogleWorkbook):
                 # Column A: data value
                 ws[f'A{idx}'] = value
                 
-                # Column B: formula ="*"&A{row_number}
-                ws[f'B{idx}'] = f'="*{value}'
-
-                self._formulas[f'B{idx}'] = f'="*"&A{idx}'
+                # Column B: Add asterisk before the value (literal string, not formula)
+                ws[f'B{idx}'] = f'*{value}'
                 
                 # Column C: row number (line number)
                 ws[f'C{idx}'] = idx - 1
