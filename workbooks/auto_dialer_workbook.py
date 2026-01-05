@@ -51,7 +51,7 @@ class AutoDialerWorkbook(ExcelToGoogleWorkbook):
                 ws[f'A{idx}'] = value
                 
                 # Column B: formula ="*"&A{row_number}
-                ws[f'B{idx}'] = f'="*"&A{idx}'
+                ws[f'B{idx}'] = f'="*{value}'
 
                 self._formulas[f'B{idx}'] = f'="*"&A{idx}'
                 
