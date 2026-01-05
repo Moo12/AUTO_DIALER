@@ -33,7 +33,7 @@ class AutoDialerWorkbook(ExcelToGoogleWorkbook):
             headers = {
                 'A1': 'מספרים בלי כוכבית',
                 'B1': 'מספרים עם כוכבית',
-                'D1': ''  # Empty title for column C
+                'C1': ''  # Empty title for column C
             }
             
             # Set header values and adjust column widths
@@ -56,7 +56,7 @@ class AutoDialerWorkbook(ExcelToGoogleWorkbook):
                 self._formulas[f'B{idx}'] = f'="*"&A{idx}'
                 
                 # Column C: row number (line number)
-                ws[f'D{idx}'] = idx - 1
+                ws[f'C{idx}'] = idx - 1
 
             excel_buffer = io.BytesIO()
             wb.save(excel_buffer)
