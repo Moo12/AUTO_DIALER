@@ -17,7 +17,10 @@ class FilterWorkbook(ExcelToGoogleWorkbook):
 
     def __init__(self, google_sheet_folder_id: str, excel_file_pattern: str, google_wb_name: str, output_folder_path: str):
         super().__init__(google_sheet_folder_id, excel_file_pattern, google_wb_name, output_folder_path)
-        self._formulas = {}  # Store formulas to add after upload
+        self._formulas = {}
+        
+        self.main_sheet_name = "פילטר חייגן"  # Store formulas to add after upload
+        self.summary_sheet_name = "טיוטה"
     
     def create_excel_file(self, **kwargs):
         """
@@ -31,11 +34,18 @@ class FilterWorkbook(ExcelToGoogleWorkbook):
         """
         calls = kwargs.get('calls')
         customers = kwargs.get('customers')
+        customers_input_file = kwargs.get('customers_input_file')
+        caller_id = kwargs.get('caller_id')
+        
         
         if calls is None:
             raise ValueError("calls is required")
         if customers is None:
             raise ValueError("customers is required")
+        if customers_input_file is None:
+            raise ValueError("customers_input_file is required")
+        if caller_id is None:
+            raise ValueError("caller_id is required")
 
         try:
 
@@ -43,7 +53,7 @@ class FilterWorkbook(ExcelToGoogleWorkbook):
             wb = Workbook()
             ws = wb.active
 
-            ws.title = "פילטר חייגן"
+            ws.title = self.main_sheet_name
 
             # Set RTL (Right-to-Left) direction
             ws.sheet_view.rightToLeft = True
@@ -61,20 +71,44 @@ class FilterWorkbook(ExcelToGoogleWorkbook):
                 self._store_customers(ws, customers)
             
             # Create second sheet: טיויטות (Timestamps)
-            timestamp_ws = wb.create_sheet(title="טיויטות")
-            timestamp_ws.sheet_view.rightToLeft = True
+            
+            
             
             # Add current date and time in A1 with format: %d%m%y %H:%M
             current_datetime = datetime.now()
-            formatted_datetime = current_datetime.strftime("%d/%m/%y %H:%M")
-            timestamp_ws['A1'] = formatted_datetime
 
-            timestamp_ws.column_dimensions['A'].width = len(formatted_datetime) + 2
+            ws_summary = wb.create_sheet(title=self.summary_sheet_name)
+
+            ws_summary.sheet_view.rightToLeft = True
+
+            date_str = current_datetime.strftime("%d.%m.%Y")
+            time_str = current_datetime.strftime("%H.%M")
+
+            ws_summary['A1'] = date_str
+            ws_summary['A2'] = time_str
+            ws_summary['A3'] = customers_input_file
+            ws_summary['A4'] = caller_id
+
+            # Calculate the longest string among the values in column A
+            values = [
+                str(date_str) if date_str else '',
+                str(time_str) if time_str else '',
+                str(customers_input_file) if customers_input_file else '',
+                str(caller_id) if caller_id else ''
+            ]
+            max_length = max(len(val) for val in values) if values else 10
             
+            # Set column A width to fit the longest string (add 2 characters for padding)
+            ws_summary.column_dimensions['A'].width = max_length + 2
+            
+            if f'{self.summary_sheet_name}!A6' not in self._formulas:
+                self._formulas[f'{self.summary_sheet_name}!A6'] = f'=ARRAYFORMULA(SORT(UNIQUE(FILTER(\'{self.main_sheet_name}\'!H2:H, \'{self.main_sheet_name}\'!H2:H <> "")), 1, TRUE))'
+
             # Save to bytes buffer
             excel_buffer = io.BytesIO()
             wb.save(excel_buffer)
             excel_buffer.seek(0)
+
             return excel_buffer
             
         except Exception as e:
@@ -133,6 +167,10 @@ class FilterWorkbook(ExcelToGoogleWorkbook):
             # Column H: Not in Group Name and Not in Destination Name
             f'{sheet_name}!H2': '=ARRAYFORMULA(IF(A2:A = "", "", IF((COUNTIF(E:E, A2:A) = 0) * (COUNTIF(D:D, A2:A) = 0), TEXT(A2:A, "0"), "")))'
         }
+
+        
+
+
 
     def _store_calls(self, ws, calls):
         # Alignment style: don't wrap text, hide overflow (content that doesn't fit will be hidden)

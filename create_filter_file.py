@@ -43,7 +43,9 @@ def main():
             end_date=end_date
         )
 
-        create_filter_google_manager().run(calls=calls, customers_input_file=args.customers_input_file)
+        print(f"caller id: {args.caller_id} start date: {start_date} end date: {end_date} customers input file: {args.customers_input_file}", file=sys.stderr)
+
+        create_filter_google_manager().run(calls=calls, customers_input_file=args.customers_input_file, caller_id=args.caller_id)
         
         output_json = {
             'success': True,

@@ -16,10 +16,11 @@ from openpyxl.styles import Font, Alignment
 
 class FilterFile(BaseProcess):
 
-    def __init__(self, drive_service, customers_google_folder_id: str, customers_file_name_pattern: str):
+    def __init__(self, drive_service, customers_google_folder_id: str, customers_file_name_pattern: str, auto_dialer_file_name_pattern: str):
         super().__init__(drive_service, "filter")
         self.customers_google_folder_id = customers_google_folder_id
         self.customers_file_name_pattern = customers_file_name_pattern
+        self.auto_dialer_file_name_pattern = auto_dialer_file_name_pattern
     def generate_data(self, **kwargs):
         """
         Generate an Excel workbook with Hebrew headers and ARRAYFORMULA formulas.
@@ -29,12 +30,17 @@ class FilterFile(BaseProcess):
         """
         try:
             calls = kwargs.get('calls')
-            customers = self._get_customers(kwargs.get('customers_input_file'))
-            
+            caller_id = kwargs.get('caller_id')
+            input_file_path = kwargs.get('customers_input_file')
+            customers, customers_input_file = self._get_customers(input_file_path)
+
+            print(f"Input file path: {customers_input_file} caller id: {caller_id}", file=sys.stderr)
         
             return {
                 'calls': calls,
-                'customers': customers
+                'customers': customers,
+                'customers_input_file': customers_input_file,
+                'caller_id': caller_id
             }
             
         except ImportError:
@@ -55,7 +61,10 @@ class FilterFile(BaseProcess):
             List of values from column A starting from row 2
         """
         if customers_input_file is None:
-            return self._get_customers_from_google_drive()
+            customers_input_file_id, customers_input_file_name = self.get_last_customers_file()
+            customers_input_file = customers_input_file_name
+            customers = self._get_customers_from_google_drive(customers_input_file_id)
+            return customers, customers_input_file
         
         # Check if it's a Google Sheets file ID (typically a long alphanumeric string)
         # Google Drive file IDs are usually 25-44 characters long
@@ -63,13 +72,32 @@ class FilterFile(BaseProcess):
             # Might be a Google Sheets file ID, try reading from Google Sheets API
             print(f"Detected potential Google Sheets file ID, reading from Google Sheets API...", file=sys.stderr)
             try:
-                return self._get_customers_from_google_sheets_id(customers_input_file)
+                customers = self._get_customers_from_google_sheets_id(customers_input_file)
+                return customers, customers_input_file
             except Exception as e:
                 print(f"Failed to read as Google Sheets ID, trying as file path: {e}", file=sys.stderr)
                 # Fall through to try as file path
         
         # Try reading as Excel file
-        return self._get_customers_from_excel_file(customers_input_file)
+        customers = self._get_customers_from_excel_file(customers_input_file)
+        # If it's a full path, extract the file name
+        if isinstance(customers_input_file, str):
+            file_name = os.path.basename(customers_input_file)
+            # Extract only the part that matches the auto dialer file name pattern
+            import re
+            if self.auto_dialer_file_name_pattern:
+                # Extract the prefix from the pattern (everything before the first placeholder)
+                # For example: "DIALER_{date}_{time}" -> "DIALER_"
+                pattern_prefix = self.auto_dialer_file_name_pattern.split('{')[0]
+                # Find where the pattern prefix starts in the file name
+                prefix_index = file_name.upper().find(pattern_prefix.upper())
+
+                if prefix_index != -1:
+                    # Extract everything from the prefix to the end of the filename
+                    file_name = file_name[prefix_index:]
+            
+            customers_input_file = file_name
+        return customers, customers_input_file
 
     def _get_customers_from_excel_file(self, customers_input_file):
         """
@@ -160,8 +188,8 @@ class FilterFile(BaseProcess):
         
         return customers
     
-    def _get_customers_from_google_drive(self):
-        customers_input_file_id = self.get_last_customers_file()
+    def _get_customers_from_google_drive(self, customers_input_file_id):
+        
 
         print(f"Customers input file: {customers_input_file_id}", file=sys.stderr)
 
@@ -209,12 +237,12 @@ class FilterFile(BaseProcess):
         print(f"Customers Google folder ID: {self.customers_google_folder_id}, Customers file name pattern: {self.customers_file_name_pattern}", file=sys.stderr)
         
         # Get the latest file matching the pattern from Google Drive
-        latest_file = self.drive_service.get_latest_file_by_pattern(
+        latest_file_id, latest_file_name = self.drive_service.get_latest_file_by_pattern(
             folder_id=self.customers_google_folder_id,
             file_name_pattern=self.customers_file_name_pattern
         )
         
-        return latest_file 
+        return latest_file_id, latest_file_name
 
 def create_filter_google_manager():
     from filter_file import FilterFile
@@ -226,6 +254,8 @@ def create_filter_google_manager():
 
     customers_file_name_pattern = config.get_output_file_pattern_by_name('customers', 'intermidiate')
 
-    print(f"Customers Google folder ID: {customers_google_folder_id}, Customers file name pattern: {customers_file_name_pattern}", file=sys.stderr)
+    auto_dialer_file_name_pattern = config.get_excel_workbooks_config_by_name('customers').get('auto_dialer', {}).get('file_name_pattern', '')
 
-    return FilterFile(drive_service, customers_google_folder_id, customers_file_name_pattern)
+    print(f"Customers Google folder ID: {customers_google_folder_id}, Customers file name pattern: {customers_file_name_pattern} auto dialer file name pattern: {auto_dialer_file_name_pattern}", file=sys.stderr)
+
+    return FilterFile(drive_service, customers_google_folder_id, customers_file_name_pattern, auto_dialer_file_name_pattern)

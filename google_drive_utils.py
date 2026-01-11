@@ -149,8 +149,9 @@ class GDriveService:
         latest_file = matching_files[0]
         file_id = latest_file['id']
         
+        
         print(f"✅ Found latest file: {latest_file['name']} (ID: {file_id})", file=sys.stderr)
-        return file_id
+        return file_id, latest_file['name']
     
     def add_formulas_to_sheet(self, spreadsheet_id, formulas):
         """
