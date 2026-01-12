@@ -168,10 +168,6 @@ class FilterWorkbook(ExcelToGoogleWorkbook):
             f'{sheet_name}!H2': '=ARRAYFORMULA(IF(A2:A = "", "", IF((COUNTIF(E:E, A2:A) = 0) * (COUNTIF(D:D, A2:A) = 0), TEXT(A2:A, "0"), "")))'
         }
 
-        
-
-
-
     def _store_calls(self, ws, calls):
         # Alignment style: don't wrap text, hide overflow (content that doesn't fit will be hidden)
         no_wrap_alignment = Alignment(wrap_text=False, shrink_to_fit=False)
@@ -189,3 +185,6 @@ class FilterWorkbook(ExcelToGoogleWorkbook):
         for idx, customer in enumerate(customers, start=2):
             cell = ws.cell(row=idx, column=1, value=customer)
             cell.alignment = no_wrap_alignment
+
+    def get_summary_missing_customers_range(self):
+        return f"'{self.summary_sheet_name}'!A6:A"

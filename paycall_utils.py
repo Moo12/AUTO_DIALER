@@ -229,11 +229,11 @@ def _parse_response(response: Any) -> Optional[list]:
     try:
         rows = response.json()
     except Exception as e:
-        print(f"⚠️  Failed to parse PayCall response: {e}", file=sys.stderr)
+        print(f"⚠️  Failed to parse PayCall response: {e} response: {response}", file=sys.stderr)
         raise Exception(f"Failed to parse PayCall response: {e}")
 
     if not isinstance(rows, list):
-        print(f"⚠️  Unexpected response format from PayCall", file=sys.stderr)
+        print(f"⚠️  Unexpected response format from PayCall response: {response}", file=sys.stderr)
         raise Exception(f"Unexpected response format from PayCall")
 
     return rows
@@ -342,7 +342,7 @@ def get_paycall_data(
             )
                 
         except Exception as e:
-            print(f"⚠️  Failed to fetch PayCall data: {e}", file=sys.stderr)
+            print(f"⚠️  Failed to fetch PayCall data: {e} response: {response}", file=sys.stderr)
             raise
 
         # Parse response

@@ -45,8 +45,17 @@ def main():
 
         print(f"caller id: {args.caller_id} start date: {start_date} end date: {end_date} customers input file: {args.customers_input_file}", file=sys.stderr)
 
-        create_filter_google_manager().run(calls=calls, customers_input_file=args.customers_input_file, caller_id=args.caller_id)
+        filter_google_manager = create_filter_google_manager()
+        google_sheet_ids = filter_google_manager.run(calls=calls, customers_input_file=args.customers_input_file, caller_id=args.caller_id)
+        if google_sheet_ids is None or len(google_sheet_ids) == 0: 
+            raise ValueError("Google sheet ID is not found")
         
+        google_sheet_id = google_sheet_ids[0]
+        print(f"Google sheet ID: {google_sheet_id}", file=sys.stderr)
+        missing_customers = filter_google_manager.get_list_of_missing_customers(google_sheet_id)
+
+        print(f"Missing customers: {missing_customers}", file=sys.stderr)
+
         output_json = {
             'success': True,
         }

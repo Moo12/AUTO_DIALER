@@ -21,6 +21,7 @@ class FilterFile(BaseProcess):
         self.customers_google_folder_id = customers_google_folder_id
         self.customers_file_name_pattern = customers_file_name_pattern
         self.auto_dialer_file_name_pattern = auto_dialer_file_name_pattern
+
     def generate_data(self, **kwargs):
         """
         Generate an Excel workbook with Hebrew headers and ARRAYFORMULA formulas.
@@ -243,6 +244,31 @@ class FilterFile(BaseProcess):
         )
         
         return latest_file_id, latest_file_name
+
+    def get_list_of_missing_customers(self, spread_sheet_id: str):
+        
+        if "filter" in self.excel_to_google_workbook:
+            filter_workbook = self.excel_to_google_workbook["filter"]
+            
+            main_col_range = filter_workbook.get_summary_missing_customers_range()
+            result = self.drive_service.sheets_service.spreadsheets().values().get(
+                spreadsheetId=spread_sheet_id,
+                range=main_col_range
+            ).execute()
+
+            values = result.get('values', [])
+
+            # Flatten the list of lists `values` to a single list of values
+            flat_values = []
+            for row in values:
+                flat_values.extend(row)
+            values = flat_values
+            return values
+
+        else:
+            print(f"FilterWorkbook not found in excel_to_google_workbook", file=sys.stderr)
+            return None
+
 
 def create_filter_google_manager():
     from filter_file import FilterFile
