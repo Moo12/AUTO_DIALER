@@ -58,6 +58,7 @@ def main():
 
         output_json = {
             'success': True,
+            'data': missing_customers
         }
         print(json.dumps(output_json, ensure_ascii=False), file=sys.stdout)
         sys.exit(0)

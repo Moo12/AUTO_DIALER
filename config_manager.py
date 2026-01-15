@@ -90,12 +90,13 @@ class ConfigManager:
                 print(f"Backup created: {backup_path}", file=sys.stderr)
         
         # Write updated config
+        print(f"Config path: {self.config_path} to save: {config}", file=sys.stderr)
         with open(self.config_path, 'w', encoding='utf-8') as f:
             yaml.dump(config, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
         
         print(f"Configuration saved to {self.config_path}", file=sys.stderr)
     
-    def update_customers_input_sheet(self, sheet_name: str, sheet_config: Dict[str, Any]) -> Dict[str, Any]:
+    def update_customers_input_sheet(self, sheet_config: Dict[str, Any]) -> Dict[str, Any]:
         """
         Update configuration for customers input sheet (sheet_1 or sheet_2).
         
@@ -114,15 +115,18 @@ class ConfigManager:
         Raises:
             ValueError: If sheet_name is invalid or required fields are missing
         """
-        if sheet_name not in ['sheet_1', 'sheet_2']:
-            raise ValueError(f"Invalid sheet_name: {sheet_name}. Must be 'sheet_1' or 'sheet_2'")
+        for sheet_name in sheet_config.keys():
+            if sheet_name not in ['sheet_1', 'sheet_2']:
+                raise ValueError(f"Invalid sheet_name: {sheet_name}. Must be 'sheet_1' or 'sheet_2'")
         
         # Validate required fields
         required_fields_base = ['wb_id', 'sheet_name', 'asterix_column_letter']
-        required_fields = required_fields_base + ['filter_column_letter'] if sheet_name == 'sheet_2' else required_fields_base
-        for field in required_fields:
-            if field not in sheet_config:
-                raise ValueError(f"Missing required field: {field}")
+        for sheet_name, sheet_config_item in sheet_config.items():
+            print(f"Sheet name: {sheet_name}, Sheet config item: {sheet_config_item}", file=sys.stderr)
+            required_fields = required_fields_base + ['filter_column_letter'] if sheet_name == 'sheet_2' else required_fields_base
+            for field in required_fields:
+                if field not in sheet_config_item:
+                    raise ValueError(f"Missing required field: {field}")
         
         # Load current config
         config = self.load_config()
@@ -135,9 +139,10 @@ class ConfigManager:
         if 'input' not in config['files']['customers']:
             config['files']['customers']['input'] = {}
         
-        # Update the sheet configuration
-        config['files']['customers']['input'][sheet_name] = sheet_config
+        for sheet_name, sheet_config_item in sheet_config.items():
+            config['files']['customers']['input'][sheet_name] = sheet_config_item
         
+
         return config
     
     def get_customers_input_sheets(self, sheets_names):
@@ -173,7 +178,7 @@ class ConfigManager:
         
         return sheet_configs
     
-    def update_and_save_customers_input_sheet(self, sheet_name: str, sheet_config: Dict[str, Any]) -> None:
+    def update_and_save_customers_input_sheet(self, sheet_config: Dict[str, Any]) -> None:
         """
         Update and save configuration for customers input sheet.
         
@@ -183,7 +188,8 @@ class ConfigManager:
             sheet_name: Either 'sheet_1' or 'sheet_2'
             sheet_config: Dictionary with sheet configuration
         """
-        config = self.update_customers_input_sheet(sheet_name, sheet_config)
+        config = self.update_customers_input_sheet(sheet_config)
+
         self.save_config(config)
     
     def get_all_customers_input_sheets(self) -> Dict[str, Any]:
@@ -197,7 +203,7 @@ class ConfigManager:
         return config.get('files', {}).get('customers', {}).get('input', {})
 
 
-def update_customers_sheet_config(sheet_name: str, sheet_config: Dict[str, Any], config_path: Optional[str] = None) -> None:
+def update_customers_sheet_config( sheet_config: Dict[str, Any], config_path: Optional[str] = None) -> None:
     """
     Convenience function to update customers sheet configuration.
     
@@ -207,7 +213,7 @@ def update_customers_sheet_config(sheet_name: str, sheet_config: Dict[str, Any],
         config_path: Optional path to config file
     """
     manager = ConfigManager(config_path)
-    manager.update_and_save_customers_input_sheet(sheet_name, sheet_config)
+    manager.update_and_save_customers_input_sheet(sheet_config)
 
 
 def get_customers_sheet_config(sheet_name: str, config_path: Optional[str] = None) -> Optional[Dict[str, Any]]:

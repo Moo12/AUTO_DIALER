@@ -1,3 +1,9 @@
+# Web service dependencies
+fastapi==0.115.0
+uvicorn[standard]==0.32.0
+pydantic==2.9.2
+
+# Auto dialer project dependencies (required since we import from it)
 cachetools==6.2.4
 certifi==2025.11.12
 charset-normalizer==3.4.4

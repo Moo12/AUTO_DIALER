@@ -4,6 +4,7 @@ Configuration management for dial file generator.
 
 import os
 import yaml
+import sys
 from pathlib import Path
 from typing import Dict, Any, Optional
 
@@ -48,6 +49,7 @@ class Config:
             FileNotFoundError: If config file doesn't exist
             yaml.YAMLError: If config file is invalid
         """
+        print(f"Loading config from: {config_path}", file=sys.stderr)
         if config_path is None:
             # Look for config.yaml in project root
             project_root = Path(__file__).parent.parent
@@ -270,5 +272,6 @@ def _get_default_config(config_path: Optional[str] = None) -> Config:
     
     if _default_config is None:
         _default_config = Config(config_path)
-    
+    else:
+        _default_config.load(config_path)
     return _default_config
