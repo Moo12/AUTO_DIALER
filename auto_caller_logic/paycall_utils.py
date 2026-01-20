@@ -8,7 +8,7 @@ import sys
 import time
 from typing import Optional, Dict, Any, Tuple
 
-from config import _get_default_config
+from .config import _get_default_config
 
 from datetime import datetime
 

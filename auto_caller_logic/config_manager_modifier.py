@@ -4,7 +4,7 @@ Example usage of ConfigManager for updating customers input sheet configurations
 This demonstrates how to use the ConfigManager to update sheet_1 and sheet_2 configurations.
 """
 
-from config_manager import ConfigManager, update_customers_sheet_config
+from .config import _get_default_config
 import json
 import sys
 import argparse
@@ -17,13 +17,14 @@ def example_update_sheet_1():
         'sheet_name': 'גיליון1',
         'asterix_column_letter': 'Y'
     }
-    update_customers_sheet_config('sheet_1', sheet_1_config)
+    config = _get_default_config()
+    config.update_customers_input_sheet({'sheet_1': sheet_1_config})
 
 
 def example_update_sheet_2():
     """Example: Update sheet_2 configuration."""
     # Method 2: Using the ConfigManager class directly
-    manager = ConfigManager()
+    config = _get_default_config()
     
     sheet_2_config = {
         'wb_id': '1VNxGGzR5j1MBNqjhKAIMmdLgqMfTgNTh6kGH4tg1sqw',
@@ -32,23 +33,23 @@ def example_update_sheet_2():
         'asterix_column_letter': 'F'
     }
     
-    manager.update_and_save_customers_input_sheet('sheet_2', sheet_2_config)
+    config.update_customers_input_sheet({'sheet_2': sheet_2_config})
 
 
 def example_get_sheet_config():
     """Example: Get current sheet configuration."""
-    manager = ConfigManager()
+    config = _get_default_config()
     
     # Get sheet_1 config
-    sheet_1 = manager.get_customers_input_sheets(['sheet_1'])
+    sheet_1 = config.get_customers_input_sheets(['sheet_1'])
     print(f"Sheet 1 config: {sheet_1}")
     
     # Get sheet_2 config
-    sheet_2 = manager.get_customers_input_sheets(['sheet_2'])
+    sheet_2 = config.get_customers_input_sheets(['sheet_2'])
     print(f"Sheet 2 config: {sheet_2}")
     
     # Get all sheets
-    all_sheets = manager.get_customers_input_sheets(['sheet_1', 'sheet_2'])
+    all_sheets = config.get_customers_input_sheets(['sheet_1', 'sheet_2'])
     print(f"All sheets: {all_sheets}")
 
 
@@ -75,12 +76,13 @@ def example_frontend_usage():
             'asterix_column_letter': 'Y'
         }
     }
+
+    config = _get_default_config()
     
     # Update configuration
-    update_customers_sheet_config(
-        sheet_name=frontend_data['sheet_name'],
-        sheet_config=frontend_data['config']
-    )
+    config.update_customers_input_sheet({
+        frontend_data['sheet_name']: frontend_data['config']
+    })
     
     print(f"Updated {frontend_data['sheet_name']} configuration")
 
@@ -114,9 +116,9 @@ def main():
     updated_sheets = []
     sheets_config = None
     
+    config = _get_default_config()
     # Get sheets configuration if requested
     if args.get_sheets:
-        manager = ConfigManager()
         
         # Handle "all" keyword
         if args.get_sheets.lower() == 'all':
@@ -126,7 +128,7 @@ def main():
             sheet_names = [s.strip() for s in args.get_sheets.split(',')]
         
         try:
-            sheets_config = manager.get_customers_input_sheets(sheet_names)
+            sheets_config = config.get_customers_input_sheets(sheet_names)
             print(f"Retrieved configuration for {', '.join(sheet_names)}", file=sys.stderr)
         except Exception as e:
             raise ValueError(f"Error getting sheets configuration: {e}")
@@ -135,7 +137,7 @@ def main():
     if args.sheet_1:
         try:
             sheet_1_config = json.loads(args.sheet_1)
-            update_customers_sheet_config('sheet_1', sheet_1_config)
+            config.update_customers_input_sheet({'sheet_1': sheet_1_config})
             updated_sheets.append('sheet_1')
             print(f"Updated sheet_1 configuration", file=sys.stderr)
         except json.JSONDecodeError as e:
@@ -145,7 +147,7 @@ def main():
     if args.sheet_2:
         try:
             sheet_2_config = json.loads(args.sheet_2)
-            update_customers_sheet_config('sheet_2', sheet_2_config)
+            config.update_customers_input_sheet({'sheet_2': sheet_2_config})
             updated_sheets.append('sheet_2')
             print(f"Updated sheet_2 configuration", file=sys.stderr)
         except json.JSONDecodeError as e:

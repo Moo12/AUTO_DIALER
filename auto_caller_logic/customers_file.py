@@ -1,5 +1,5 @@
-from google_drive_utils import BaseProcess, GDriveService
-from config import _get_default_config
+from .google_drive_utils import BaseProcess, GDriveService
+from .config import _get_default_config
 from pathlib import Path
 import os
 import sys

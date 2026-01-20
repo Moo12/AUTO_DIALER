@@ -12,7 +12,7 @@ from googleapiclient.http import MediaIoBaseUpload
 import pickle
 import sys
 from datetime import datetime
-from config import _get_default_config
+from .config import _get_default_config
 
 # Google API scopes - need both Drive and Sheets
 SCOPES = [
@@ -271,10 +271,10 @@ def create_excel_to_google_workbook(workbook_name: str, config: Dict[str, Any]):
         Instance of appropriate ExcelToGoogleWorkbook subclass
     """
 
-    from workbooks.intermediate_workbook import IntermediateWorkbook
-    from workbooks.auto_dialer_workbook import AutoDialerWorkbook
-    from workbooks.filter_workbook import FilterWorkbook
-    from workbooks.base_workbook import BaseExcelToGoogleWorkbook
+    from .workbooks.intermediate_workbook import IntermediateWorkbook
+    from .workbooks.auto_dialer_workbook import AutoDialerWorkbook
+    from .workbooks.filter_workbook import FilterWorkbook
+    from .workbooks.base_workbook import BaseExcelToGoogleWorkbook
     # Get config values with fallbacks for optional fields
     google_folder_id = config.get('google_folder_id', '')
     excel_file_pattern = config.get('file_name_pattern')

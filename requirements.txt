@@ -37,3 +37,7 @@ tzdata==2025.3
 uritemplate==4.2.0
 urllib3==2.6.2
 xlsxwriter==3.2.9
+
+# Database dependencies for settings backend
+sqlalchemy>=2.0.0
+pymysql>=1.1.0

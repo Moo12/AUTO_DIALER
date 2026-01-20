@@ -8,7 +8,7 @@ import argparse
 import sys
 import os
 from pathlib import Path
-from customers_file import create_customers_google_manager
+from .customers_file import create_customers_google_manager
 
 
 def main():
@@ -45,6 +45,9 @@ def main():
         # Also print to stderr for logging
         print(f"ERROR: {type(e).__name__}: {str(e)}", file=sys.stderr)
         sys.exit(1)
+
+# Export main as import_customers for package imports
+import_customers = main
 
 if __name__ == "__main__":
     main()

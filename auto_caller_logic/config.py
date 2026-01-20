@@ -7,6 +7,7 @@ import yaml
 import sys
 from pathlib import Path
 from typing import Dict, Any, Optional
+from common_utils.config_manager import ConfigManager
 
 
 class Config:
@@ -24,55 +25,16 @@ class Config:
             config_path: Path to config file. If None, checks environment variable
                          CONFIG_FILE_PATH, then defaults to config.yaml in project root.
         """
-        self._config: Optional[Dict[str, Any]] = None
         # Check environment variable first, then use provided path, then default
         if config_path is None:
             env_config_path = os.getenv('CONFIG_FILE_PATH')
             if env_config_path:
                 config_path = env_config_path
             else:
+                # Look for config.yaml in auto_caller_logic folder (current directory)
                 config_path = Path(__file__).parent / "config.yaml"
-        if config_path:
-            self.load(config_path)
-    
-    def load(self, config_path: Optional[str] = None) -> Dict[str, Any]:
-        """
-        Load configuration from YAML file.
         
-        Args:
-            config_path: Path to config file. If None, looks for config.yaml in project root.
-            
-        Returns:
-            Dictionary containing configuration
-            
-        Raises:
-            FileNotFoundError: If config file doesn't exist
-            yaml.YAMLError: If config file is invalid
-        """
-        print(f"Loading config from: {config_path}", file=sys.stderr)
-        if config_path is None:
-            # Look for config.yaml in project root
-            project_root = Path(__file__).parent.parent
-            config_path = project_root / "config.yaml"
-        
-        config_path = Path(config_path)
-        
-        if not config_path.exists():
-            raise FileNotFoundError(
-                f"Config file not found: {config_path}. "
-                f"Please copy config.example.yaml to config.yaml and fill in your settings."
-            )
-        
-        with open(config_path, 'r', encoding='utf-8') as f:
-            self._config = yaml.safe_load(f)
-        
-        # Validate required config sections
-        required_sections = ['files']
-        for section in required_sections:
-            if section not in self._config:
-                raise ValueError(f"Missing required config section: {section}")
-        
-        return self._config
+        self._config_manager = ConfigManager(str(config_path))
     
     def get_config(self) -> Dict[str, Any]:
         """
@@ -84,11 +46,11 @@ class Config:
         Raises:
             RuntimeError: If config hasn't been loaded yet
         """
-        if self._config is None:
+        if self._config_manager is None:
             raise RuntimeError(
                 "Configuration not loaded. Call load() first."
             )
-        return self._config
+        return self._config_manager.load()
     
     def get_customers_input_config(self) -> Dict[str, str]:
         """
@@ -97,7 +59,7 @@ class Config:
         Returns:
             Dictionary with sheet_1_id, sheet_2_id, and output_sheet_id
         """
-        config = self.get_config()
+        config = self._config_manager.load()
         return config.get('files', {}).get('customers', {}).get('input', {})
 
     def get_customers_input_sheet_config(self, sheet_name: str) -> Dict[str, str]:
@@ -107,7 +69,7 @@ class Config:
         Returns:
             Dictionary with sheet_1_id, sheet_2_id, and output_sheet_id
         """
-        config = self.get_config()
+        config = self._config_manager.load()
         return config.get('files', {}).get('customers', {}).get('input', {}).get(sheet_name, {})
 
     def get_excel_workbooks_config_by_name(self, name: str) -> Dict[str, Any]:
@@ -121,7 +83,7 @@ class Config:
             Dict[str, Dict[str, Any]]: Dictionary mapping workbook names to their configs
             Example: {'~ intermidiate': {...}, '~ outo_dialer': {...}}
         """
-        files_config = self.get_config().get('files', {})
+        files_config = self._config_manager.load().get('files', {})
         if name not in files_config:
             raise ValueError(f"Invalid file name: {name}. Available: {list(files_config.keys())}")
         
@@ -132,7 +94,7 @@ class Config:
         return excel_workbooks
 
     def get_output_excel_file_config_by_name(self, name_method: str, name_excel_workbook: str) -> Dict[str, str]:
-        if name_method not in self.get_config().get('files', {}):
+        if name_method not in self._config_manager.load().get('files', {}):
             raise ValueError(f"Invalid file name: {name_method}")
         return self.get_excel_workbooks_config_by_name(name_method).get(name_excel_workbook, {}).get('output_folder_path', '')
     
@@ -149,7 +111,7 @@ class Config:
         Returns:
             Dictionary with pickle_file_path and credentials_file_path
         """
-        config = self.get_config()
+        config = self._config_manager.load()
         service_config = config.get('service', {})
         
         return {
@@ -164,7 +126,7 @@ class Config:
         Returns:
             Dictionary with temp_dir and file patterns
         """
-        config = self.get_config()
+        config = self._config_manager.load()
         output_config = config.get('output', {})
         
         return {
@@ -180,7 +142,7 @@ class Config:
         Returns:
             Dictionary with email, password, and paycall_id
         """
-        config = self.get_config()
+        config = self._config_manager.load()
         paycall_account = config.get('paycall', {}).get('account', {})
         return {
             'email': paycall_account.get('email', ''),
@@ -195,7 +157,7 @@ class Config:
         Returns:
             String with paycall API URL
         """
-        config = self.get_config()
+        config = self._config_manager.load()
         return config.get('paycall', {}).get('api_url', '')
     
     def get_paycall_limit(self) -> int:
@@ -205,7 +167,7 @@ class Config:
         Returns:
             Integer with paycall limit
         """
-        config = self.get_config()
+        config = self._config_manager.load()
         return config.get('paycall', {}).get('limit', 500)
     
     def get_paycall_order_by(self) -> str:
@@ -215,7 +177,7 @@ class Config:
         Returns:
             String with paycall order by
         """
-        config = self.get_config()
+        config = self._config_manager.load()
         return config.get('paycall', {}).get('order_by', 'asc')
     
     def get_paycall_retry_config(self) -> Dict[str, Any]:
@@ -225,7 +187,7 @@ class Config:
         Returns:
             Dictionary with max_retries, backoff_factor, and retryable_status_codes
         """
-        config = self.get_config()
+        config = self._config_manager.load()
         retry_config = config.get('paycall', {}).get('retry', {})
         return {
             'max_retries': retry_config.get('max_retries', 3),
@@ -240,7 +202,7 @@ class Config:
         Returns:
             Dictionary with main_archive_folder_id, filter_folder_id, and auto_calls_folder_id
         """
-        config = self.get_config()
+        config = self._config_manager.load()
         google_drive_config = config.get('google_drive', {})
         return {
             'main_archive_folder_id': google_drive_config.get('main_archive_folder_id', ''),
@@ -248,30 +210,104 @@ class Config:
             'intermediate_folder_id': google_drive_config.get('intermediate_folder_id', ''),
             'auto_calls_folder_id': google_drive_config.get('auto_calls_folder_id', '')
         }
+    def update_customers_input_sheet(self, sheet_config: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Update configuration for customers input sheet (sheet_1 or sheet_2).
+        
+        Args:
+            sheet_name: Either 'sheet_1' or 'sheet_2'
+            sheet_config: Dictionary with sheet configuration:
+                - wb_id: Google Sheets workbook ID
+                - sheet_name: Sheet name within the workbook
+                - asterix_column_letter: Column letter for asterix (required for sheet_1)
+                - filter_column_letter: Column letter for filter (required for sheet_2)
+                - asterix_column_letter: Column letter for asterix (required for sheet_2)
+        
+        Returns:
+            Updated configuration dictionary
+            
+        Raises:
+            ValueError: If sheet_name is invalid or required fields are missing
+        """
+        for sheet_name in sheet_config.keys():
+            if sheet_name not in ['sheet_1', 'sheet_2']:
+                raise ValueError(f"Invalid sheet_name: {sheet_name}. Must be 'sheet_1' or 'sheet_2'")
+        
+        # Validate required fields
+        required_fields_base = ['wb_id', 'sheet_name', 'asterix_column_letter']
+        for sheet_name, sheet_config_item in sheet_config.items():
+            print(f"Sheet name: {sheet_name}, Sheet config item: {sheet_config_item}", file=sys.stderr)
+            required_fields = required_fields_base + ['filter_column_letter'] if sheet_name == 'sheet_2' else required_fields_base
+            for field in required_fields:
+                if field not in sheet_config_item:
+                    raise ValueError(f"Missing required field: {field}")
+
+        config = self._config_manager.load()
+        
+        # Ensure the structure exists
+        if 'files' not in config:
+            config['files'] = {}
+        if 'customers' not in config['files']:
+            config['files']['customers'] = {}
+        if 'input' not in config['files']['customers']:
+            config['files']['customers']['input'] = {}
+        
+        for sheet_name, sheet_config_item in sheet_config.items():
+            config['files']['customers']['input'][sheet_name] = sheet_config_item
+        
+
+        self._config_manager.save_config(config)
+
+    def get_customers_input_sheets(self, sheets_names):
+        """
+        Get configuration for customers input sheet (sheet_1 or sheet_2).
+        
+        Args:
+            sheet_name: Either 'sheet_1' or 'sheet_2'
+            
+        Returns:
+            Dictionary with sheet configuration, or None if not found
+        """
+
+        if isinstance(sheets_names, str):
+            sheets_names = [sheets_names]
+        elif not isinstance(sheets_names, list):
+            raise ValueError(f"sheets_names must be a list of strings")
+        
+        if any(sheet_name not in ['sheet_1', 'sheet_2'] for sheet_name in sheets_names):
+            raise ValueError(f"Invalid sheet_name: {sheets_names}. Must be 'sheet_1' or 'sheet_2'")
+        
+        config = self._config_manager.load()
+
+        sheet_configs = {}
+
+        for sheet_name in sheets_names:
+            if sheet_name not in config.get('files', {}).get('customers', {}).get('input', {}):
+                raise ValueError(f"Sheet {sheet_name} not found in config")
+            sheet_config = config.get('files', {}).get('customers', {}).get('input', {}).get(sheet_name)
+            if sheet_config is None:
+                raise ValueError(f"Sheet {sheet_name} not found in config")
+            sheet_configs[sheet_name] = sheet_config
+        
+        return sheet_configs
+    
+    def get_all_customers_input_sheets(self) -> Dict[str, Any]:
+        """
+        Get all customers input sheet configurations.
+        
+        Returns:
+            Dictionary with sheet_1 and sheet_2 configurations
+        """
+        config = self._config_manager.load()
+        
+        return config.get('files', {}).get('customers', {}).get('input', {})
 
 # Default singleton instance for backward compatibility
-_default_config: Optional[Config] = None
+config_instance: Optional[Config] = None
 
-
-def _get_default_config(config_path: Optional[str] = None) -> Config:
-    """
-    Get or create the default config instance.
+def _get_default_config(path: Optional[str] = None) -> Config:
+    global config_instance
     
-    Args:
-        config_path: Optional path to config file. If None, checks environment variable
-                     CONFIG_FILE_PATH, then defaults to "config.yaml" in project root.
-    
-    Returns:
-        The default Config instance
-    """
-    global _default_config
-    
-    # Check environment variable first, then use provided path, then default
-    if config_path is None:
-        config_path = os.getenv('CONFIG_FILE_PATH', 'config.yaml')
-    
-    if _default_config is None:
-        _default_config = Config(config_path)
-    else:
-        _default_config.load(config_path)
-    return _default_config
+    if config_instance is None:
+        config_instance = Config(path)
+    return config_instance

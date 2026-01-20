@@ -12,15 +12,8 @@ from pathlib import Path
 from typing import Optional
 from datetime import datetime
 import json
-from filter_file import create_filter_google_manager
-
-
-# Handle imports for both script and module usage
-try:
-    from .paycall_utils import get_paycall_data
-except ImportError:
-    # If running as a script, use absolute import
-    from paycall_utils import get_paycall_data
+from .filter_file import create_filter_google_manager
+from .paycall_utils import get_paycall_data
 
 
 def main():
@@ -72,6 +65,9 @@ def main():
         }
         print(json.dumps(error_json, ensure_ascii=False), file=sys.stdout)
         sys.exit(1)
+# Export main as create_filter_file for package imports
+create_filter_file = main
+
 if __name__ == "__main__":
     main()
 

@@ -8,11 +8,8 @@ with Hebrew headers and ARRAYFORMULA formulas.
 import io
 import sys
 import os
-from google_drive_utils import BaseProcess, GDriveService
-from config import _get_default_config
-from datetime import datetime
-from openpyxl import Workbook
-from openpyxl.styles import Font, Alignment
+from .google_drive_utils import BaseProcess, GDriveService
+from .config import _get_default_config
 
 class FilterFile(BaseProcess):
 
@@ -271,7 +268,8 @@ class FilterFile(BaseProcess):
 
 
 def create_filter_google_manager():
-    from filter_file import FilterFile
+    from .filter_file import FilterFile
+    from .google_drive_utils import GDriveService
     config = _get_default_config()
     service_config = config.get_service_config()
     drive_service = GDriveService(service_config)
