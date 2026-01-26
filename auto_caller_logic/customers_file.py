@@ -4,10 +4,10 @@ from pathlib import Path
 import os
 import sys
 import io
-
+from common_utils.config_manager import ConfigManager
 class CustomersFile(BaseProcess):
-    def __init__(self, drive_service, column_letter_1: str, column_letter_2: str, column_letter_2_filter: str, sheet_1_id: str, sheet_2_id: str, sheet_1_name: str, sheet_2_name: str):
-        super().__init__(drive_service, "customers")
+    def __init__(self, drive_service, config_manager: ConfigManager, column_letter_1: str, column_letter_2: str, column_letter_2_filter: str, sheet_1_id: str, sheet_2_id: str, sheet_1_name: str, sheet_2_name: str):
+        super().__init__(drive_service, config_manager, "customers")
 
         print(f"CustomersFile initialized with column_letter_1: {column_letter_1}, column_letter_2: {column_letter_2}, column_letter_2_filter: {column_letter_2_filter}, sheet_1_id: {sheet_1_id}, sheet_2_id: {sheet_2_id}, sheet_1_name: {sheet_1_name}, sheet_2_name: {sheet_2_name}", file=sys.stderr)
         self.column_letter_1 = column_letter_1
@@ -158,11 +158,11 @@ class CustomersFile(BaseProcess):
 
     def get_data_from_json(self):
         pass
-def create_customers_google_manager():
+def create_customers_google_manager(config_manager: ConfigManager):
 
     print(f"Creating CustomersFile manager", file=sys.stderr)
 
-    config = _get_default_config()
+    config = _get_default_config(config_manager)
     service_config = config.get_service_config()
     drive_service = GDriveService(service_config)
 
@@ -185,6 +185,6 @@ def create_customers_google_manager():
     if not sheet_1_id or not sheet_2_id:
         raise ValueError("Google Sheet IDs not configured. Please set customer_sheet_1_id and customer_sheet_2_id in config.yaml")
 
-    return CustomersFile(drive_service, column_letter_1=column_letter_1, column_letter_2=column_letter_2, column_letter_2_filter=column_letter_2_filter, sheet_1_id=sheet_1_id, sheet_2_id=sheet_2_id, sheet_1_name=sheet_1_name, sheet_2_name=sheet_2_name)
+    return CustomersFile(drive_service, config_manager, column_letter_1=column_letter_1, column_letter_2=column_letter_2, column_letter_2_filter=column_letter_2_filter, sheet_1_id=sheet_1_id, sheet_2_id=sheet_2_id, sheet_1_name=sheet_1_name, sheet_2_name=sheet_2_name)
 
     

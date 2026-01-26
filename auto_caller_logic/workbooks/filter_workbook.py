@@ -34,18 +34,15 @@ class FilterWorkbook(ExcelToGoogleWorkbook):
         """
         calls = kwargs.get('calls')
         customers = kwargs.get('customers')
-        customers_input_file = kwargs.get('customers_input_file')
-        caller_id = kwargs.get('caller_id')
+        summarize_data = kwargs.get('summarize_data')
         
         
         if calls is None:
             raise ValueError("calls is required")
         if customers is None:
             raise ValueError("customers is required")
-        if customers_input_file is None:
-            raise ValueError("customers_input_file is required")
-        if caller_id is None:
-            raise ValueError("caller_id is required")
+        if summarize_data is None:
+            raise ValueError("summarize_data is required")
 
         try:
 
@@ -60,9 +57,6 @@ class FilterWorkbook(ExcelToGoogleWorkbook):
 
             self._create_headers(ws)
 
-            calls = kwargs.get('calls')
-            customers = kwargs.get('customers')
-
             if calls is not None and len(calls) > 0:
                 print(f"Storing {len(calls)} calls", file=sys.stderr)
                 self._store_calls(ws, calls)
@@ -70,31 +64,25 @@ class FilterWorkbook(ExcelToGoogleWorkbook):
                 print(f"Storing {len(customers)} customers", file=sys.stderr)
                 self._store_customers(ws, customers)
             
-            # Create second sheet: טיויטות (Timestamps)
-            
-            
-            
             # Add current date and time in A1 with format: %d%m%y %H:%M
-            current_datetime = datetime.now()
-
             ws_summary = wb.create_sheet(title=self.summary_sheet_name)
 
             ws_summary.sheet_view.rightToLeft = True
 
-            date_str = current_datetime.strftime("%d.%m.%Y")
-            time_str = current_datetime.strftime("%H.%M")
+            # Use summarize_data passed from generate_data
+            date_str, time_str, customers_input_file_val, caller_id_val = summarize_data
 
             ws_summary['A1'] = date_str
             ws_summary['A2'] = time_str
-            ws_summary['A3'] = customers_input_file
-            ws_summary['A4'] = caller_id
+            ws_summary['A3'] = customers_input_file_val
+            ws_summary['A4'] = caller_id_val
 
             # Calculate the longest string among the values in column A
             values = [
                 str(date_str) if date_str else '',
                 str(time_str) if time_str else '',
-                str(customers_input_file) if customers_input_file else '',
-                str(caller_id) if caller_id else ''
+                str(customers_input_file_val) if customers_input_file_val else '',
+                str(caller_id_val) if caller_id_val else ''
             ]
             max_length = max(len(val) for val in values) if values else 10
             
@@ -188,3 +176,22 @@ class FilterWorkbook(ExcelToGoogleWorkbook):
 
     def get_summary_missing_customers_range(self):
         return f"'{self.summary_sheet_name}'!A6:A"
+    
+    @staticmethod
+    def get_header_values(customers_input_file: str, caller_id: str) -> list:
+        """
+        Get header values for A1-A4 (date, time, customers_input_file, caller_id).
+        This is a static method to avoid code duplication.
+        
+        Args:
+            customers_input_file: Name of the customers input file
+            caller_id: ID of the caller
+            
+        Returns:
+            List of 4 values: [date_str, time_str, customers_input_file, caller_id]
+        """
+        from datetime import datetime
+        current_datetime = datetime.now()
+        date_str = current_datetime.strftime("%d.%m.%Y")
+        time_str = current_datetime.strftime("%H.%M")
+        return [date_str, time_str, customers_input_file, caller_id]

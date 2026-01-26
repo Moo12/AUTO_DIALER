@@ -7,8 +7,8 @@ This module provides functionality for managing settings backend operations:
 - Configuration management
 """
 
-from .excel_handler import ExcelHandler
-from .list_manager import ListManager
+from common_utils.excel_handler import ExcelHandler
+from common_utils.list_manager import ListManager
 from .routers import router
 
 __all__ = ['ExcelHandler', 'ListManager', 'router']

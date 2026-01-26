@@ -13,7 +13,7 @@ import yaml
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 from common_utils.db_connection import DatabaseConnection
-from .excel_handler import ExcelHandler
+from common_utils.excel_handler import ExcelHandler
 from common_utils.config_manager import ConfigManager
 
 
@@ -36,10 +36,12 @@ class ListManager:
         self.list_type = list_type  # Store list_type as instance variable
 
         self.config_manager = config_manager
-        self.config = self.config_manager.load()
+        self.config = self.config_manager.get_config()
         
         # Load table configurations from data_base_tables
         self.data_base_tables = self.config.get('data_base_tables', {}).get(list_type, {})
+
+        self.users_table = self.data_base_tables.get('users', {}).get('table_name', "special_users")
         
         # Set default table names from config
         self.lists_table = self.data_base_tables.get('lists', {}).get('table_name', "list_special_users")
@@ -50,7 +52,6 @@ class ListManager:
     def import_excel_and_create_list(
         self,
         file_path: str,
-        table_name: str,
         list_name: str,
         sheet_name: Optional[str] = None,
         mapping: Optional[Dict[str, str]] = None,
@@ -101,7 +102,7 @@ class ListManager:
         try:
             step1_result = self.excel_handler.excel_to_mysql(
                 file_path=file_path,
-                table_name=table_name,
+                table_name=self.users_table,
                 sheet_name=sheet_name,
                 mapping=mapping,
                 header_row=header_row,

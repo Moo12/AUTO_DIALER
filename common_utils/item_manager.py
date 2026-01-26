@@ -29,7 +29,7 @@ class ItemManager:
         self.db = db_connection
         self.item_type = item_type
         self.config_manager = config_manager
-        self.config = config_manager.load()
+        self.config = config_manager.get_config()
         
         # Load table configurations from data_base_tables
         self.data_base_tables = self.config.get('data_base_tables', {}).get(item_type, {})
@@ -435,9 +435,14 @@ class ItemManager:
         - Updates columns from `field_values`
         - Validates column names exist
         - Prevents setting NOT NULL columns to null
+        
+        Default behavior: If `where` is empty and primary key exists in `field_values`,
+        automatically uses primary key for WHERE clause. This makes the common case
+        of updating by ID more convenient.
 
         Args:
-            where: Dictionary mapping identifying fields to values (e.g., {"id": 123})
+            where: Dictionary mapping identifying fields to values (e.g., {"id": 123}).
+                   If empty and primary key exists in field_values, will use primary key automatically.
             field_values: Dictionary mapping fields to new values
 
         Returns:
@@ -451,9 +456,22 @@ class ItemManager:
         try:
             table_name = self._get_table_name()
 
-            # Validate update values
-            update_err = self._validate_update_values(table_name, field_values)
+            # Default behavior: If where is empty, try to use primary key from field_values
+            effective_where = where.copy() if where else {}
+            effective_field_values = field_values.copy()
+            
+            if not effective_where:
+                primary_key = self._get_primary_key(table_name)
+                if primary_key and primary_key in effective_field_values:
+                    # Use primary key from field_values as WHERE clause
+                    effective_where[primary_key] = effective_field_values[primary_key]
+                    # Remove primary key from field_values to avoid updating it
+                    effective_field_values = {k: v for k, v in effective_field_values.items() if k != primary_key}
+
+            # Validate update values (after potentially removing PK)
+            update_err = self._validate_update_values(table_name, effective_field_values)
             if update_err:
+                print(f"✗ Error validating update values: {update_err}", file=sys.stderr)
                 return {
                     'success': False,
                     'rows_affected': 0,
@@ -461,8 +479,9 @@ class ItemManager:
                     'error_type': 'ValidationError'
                 }
 
-            where_sql, where_params, where_err = self._build_where_clause(table_name, where)
+            where_sql, where_params, where_err = self._build_where_clause(table_name, effective_where)
             if where_err:
+                print(f"✗ Error building where clause: {where_err}", file=sys.stderr)
                 return {
                     'success': False,
                     'rows_affected': 0,
@@ -472,7 +491,7 @@ class ItemManager:
 
             set_clauses: List[str] = []
             set_params: Dict[str, Any] = {}
-            for key, value in field_values.items():
+            for key, value in effective_field_values.items():
                 param_name = f"s_{key}"
                 set_clauses.append(f"`{key}` = :{param_name}")
                 set_params[param_name] = value
@@ -500,14 +519,36 @@ class ItemManager:
                 'error_type': error_type
             }
 
-    def remove_item(self, where: Dict[str, Any]) -> Dict[str, Any]:
+    def update_item(
+        self,
+        where: Dict[str, Any],
+        field_values: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        Alias for edit_item() for API naming consistency.
+
+        Args:
+            where: Dictionary mapping identifying fields to values (e.g., {"id": 123})
+            field_values: Dictionary mapping fields to new values
+
+        Returns:
+            Same structure as edit_item(): {success, rows_affected, error, error_type}
+        """
+        return self.edit_item(where=where, field_values=field_values)
+
+    def remove_item(self, where: Dict[str, Any], item_id: Optional[Any] = None) -> Dict[str, Any]:
         """
         Remove (delete) one or more items from the configured table.
 
         Uses exact match equality filters from `where` (ANDed).
+        
+        Default behavior: If `where` is empty and `item_id` is provided,
+        automatically uses primary key with `item_id` value for WHERE clause.
 
         Args:
-            where: Dictionary mapping identifying fields to values (e.g., {"id": 123})
+            where: Dictionary mapping identifying fields to values (e.g., {"id": 123}).
+                   If empty and item_id is provided, will use primary key automatically.
+            item_id: Optional primary key value to use when where is empty
 
         Returns:
             {
@@ -520,7 +561,30 @@ class ItemManager:
         try:
             table_name = self._get_table_name()
 
-            where_sql, where_params, where_err = self._build_where_clause(table_name, where)
+            # Default behavior: If where is empty, try to use primary key from item_id
+            effective_where = where.copy() if where else {}
+            if not effective_where:
+                if item_id is not None:
+                    primary_key = self._get_primary_key(table_name)
+                    if primary_key:
+                        # Use primary key with item_id value for WHERE clause
+                        effective_where[primary_key] = item_id
+                    else:
+                        return {
+                            'success': False,
+                            'rows_affected': 0,
+                            'error': "Cannot use item_id: table has no primary key",
+                            'error_type': 'ValidationError'
+                        }
+                else:
+                    return {
+                        'success': False,
+                        'rows_affected': 0,
+                        'error': "Either 'where' must be provided or 'item_id' must be provided",
+                        'error_type': 'ValidationError'
+                    }
+
+            where_sql, where_params, where_err = self._build_where_clause(table_name, effective_where)
             if where_err:
                 return {
                     'success': False,

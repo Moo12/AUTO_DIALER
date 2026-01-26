@@ -19,18 +19,23 @@ def main():
         customers_file = create_customers_google_manager()
 
         print(f"Running CustomersFile manager", file=sys.stderr)
-        customers_file.run()
+        process_result = customers_file.run()
 
-        output_path = customers_file.get_excel_output_file_path('auto_dialer')
+        if process_result is None or process_result['excel_buffer'] is None:
+            raise ValueError("Excel buffer is not found")
 
-        if not output_path:
-            raise ValueError(f"Output path for auto dialer not found")
-        
+        excel_bytes = process_result['auto_dialer']['excel_buffer']
+        file_name = process_result['auto_dialer']['file_name']
+
+        import base64
+        excel_bytes.seek(0)
+        excel_bytes_base64 = base64.b64encode(excel_bytes.getvalue()).decode('utf-8')
         
         # Output JSON to stdout for easy parsing by PHP/other processes
         output_json = {
             'success': True,
-            'output_path': str(Path(output_path).resolve()),
+            'excel_buffer': excel_bytes_base64,
+            'file_name': file_name,
         }
         print(json.dumps(output_json, ensure_ascii=False), file=sys.stdout)
         sys.exit(0)

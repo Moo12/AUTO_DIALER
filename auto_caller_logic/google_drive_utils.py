@@ -13,6 +13,7 @@ import pickle
 import sys
 from datetime import datetime
 from .config import _get_default_config
+from common_utils.config_manager import ConfigManager
 
 # Google API scopes - need both Drive and Sheets
 SCOPES = [
@@ -196,10 +197,9 @@ class GDriveService:
 
 class BaseProcess(ABC):
     """Abstract base class for all file-creating processes."""
-    def __init__(self, drive_service, config_name: str):
-        self.name = config_name
+    def __init__(self, drive_service, config_manager: ConfigManager, name: str = None):
 
-        excel_workbooks_config = _get_default_config().get_excel_workbooks_config_by_name(self.name)
+        excel_workbooks_config = _get_default_config(config_manager).get_excel_workbooks_config_by_name(name)
 
         # Initialize dictionary to store ExcelToGoogleWorkbook instances
         # Key is the workbook name from excel_workbooks_config (e.g., 'intermidiate', 'outo_dialer', 'filter')
@@ -218,11 +218,42 @@ class BaseProcess(ABC):
             self.excel_to_google_workbook[workbook_name] = workbook_instance
 
         self.drive_service = drive_service
+
+        self.post_data = {}
         
     @abstractmethod
     def generate_data(self, **kwargs):
         """The specific logic to create the file content."""
         pass
+
+    def post_process_implementation(self, excel_info: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        return None
+
+    def post_process(self, excel_info: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """
+        Post-process hook called after all Excel files are created and uploaded.
+        
+        This method can analyze the uploaded files and return additional data
+        that will be passed to all workbooks' post_excel_file_creation() methods.
+        
+        Args:
+            excel_info: Dictionary containing information about all created Excel files.
+                       Structure: {
+                           'workbook_name': {
+                               'file_name': str,
+                               'excel_buffer': BytesIO,
+                               'file_id': str (if uploaded)
+                           },
+                           ...
+                       }
+        
+        Returns:
+            Dictionary with data to pass to post_excel_file_creation() methods,
+            or None if no post-processing is needed.
+            Example: {'callers_gap': [...]}
+        """
+        self.post_data = self.post_process_implementation(excel_info)
+        return self.post_data
 
     def run(self, **kwargs):
         data = self.generate_data(**kwargs)
@@ -232,32 +263,98 @@ class BaseProcess(ABC):
             raise ValueError(f"generate_data() must return a dictionary, got {type(data)}")
 
         file_ids = []
+
+        excel_info = {}
         for workbook_name, excel_to_google_workbook in self.excel_to_google_workbook.items():
 
             print(f"Creating excel file for {workbook_name}", file=sys.stderr)
             # Pass data as **kwargs to create_excel_file
             excel_buffer = excel_to_google_workbook.create_excel_file(**data)
 
-            excel_to_google_workbook.save_excel_file(excel_buffer)
+            file_name = excel_to_google_workbook.output_file_name
 
-            file_id = self.drive_service.upload_excel(
-                folder_id=excel_to_google_workbook.google_sheet_folder_id,
-                file_name=excel_to_google_workbook.output_file_name,
-                excel_buffer=excel_buffer,
-            )
+            excel_info[workbook_name] = {
+                'file_name': file_name,
+                'excel_buffer': excel_buffer
+            }
 
+            if excel_to_google_workbook.google_sheet_folder_id is not None and excel_buffer is not None:
+                file_id = self.drive_service.upload_excel(
+                    folder_id=excel_to_google_workbook.google_sheet_folder_id,
+                    file_name=file_name,
+                    excel_buffer=excel_buffer,
+                )
 
-            if file_id is not None:
-                file_ids.append(file_id)                
-                # Check if workbook has formulas to add (e.g., FilterWorkbook)
-                if hasattr(excel_to_google_workbook, '_formulas') and excel_to_google_workbook._formulas:
-                    self.drive_service.add_formulas_to_sheet(
-                        spreadsheet_id=file_id,
-                        formulas=excel_to_google_workbook._formulas
-                    )
+                if file_id is not None:
+                    file_ids.append(file_id)                
+                    # Check if workbook has formulas to add (e.g., FilterWorkbook)
+                    if hasattr(excel_to_google_workbook, '_formulas') and excel_to_google_workbook._formulas:
+                        self.drive_service.add_formulas_to_sheet(
+                            spreadsheet_id=file_id,
+                            formulas=excel_to_google_workbook._formulas
+                        )
 
-        return file_ids
+                excel_info[workbook_name]['file_id'] = file_id
+        
+        # Post-process: get additional data needed for post-excel file creation
+        # Note: post_process() is OPTIONAL - subclasses don't have to implement it.
+        # If not implemented, the base class returns None, which is handled below.
+        post_process_data = self.post_process(excel_info)
 
+        # Validate post_process return value (should be dict or None)
+        if post_process_data is not None and not isinstance(post_process_data, dict):
+            raise ValueError(f"post_process() must return a dictionary or None, got {type(post_process_data)}")
+    
+        # If no post-process data (None or not implemented), use empty dict
+        # This allows post_excel_file_creation() to be called even if post_process wasn't implemented
+        post_data = post_process_data if post_process_data is not None else {}
+
+        # Post-excel file creation: create additional files based on post-process data
+        for workbook_name, excel_to_google_workbook in self.excel_to_google_workbook.items():
+            try:
+                excel_buffer = excel_to_google_workbook.post_excel_file_creation(**post_data)
+
+                print(f"google folder id {excel_to_google_workbook.google_sheet_folder_id}", file=sys.stderr)
+                
+                
+                # Only store if a buffer was created
+                if excel_buffer is not None:
+                    excel_info[workbook_name]['post_excel_buffer'] = excel_buffer
+                    
+                    # Upload post-excel file if workbook has a folder ID configured
+                    if (
+                        excel_to_google_workbook.google_sheet_folder_id is not None
+                        and excel_to_google_workbook.google_sheet_folder_id != ""
+                    ):
+                        
+                        post_file_name = excel_to_google_workbook.output_file_name# Generate a new file name for the post-excel file
+                        
+                        file_id = self.drive_service.upload_excel(
+                            folder_id=excel_to_google_workbook.google_sheet_folder_id,
+                            file_name=post_file_name,
+                            excel_buffer=excel_buffer,
+                        )
+                        
+                        if file_id is not None:
+                            excel_info[workbook_name]['post_excel_file_id'] = file_id
+                            excel_info[workbook_name]['post_excel_file_name'] = post_file_name
+                            
+                            # Check if workbook has formulas to add for post-excel file
+                            if hasattr(excel_to_google_workbook, '_post_formulas') and excel_to_google_workbook._post_formulas:
+                                self.drive_service.add_formulas_to_sheet(
+                                    spreadsheet_id=file_id,
+                                    formulas=excel_to_google_workbook._post_formulas
+                                )
+            except Exception as e:
+                # Log error but don't fail the entire process
+                print(f"⚠️  Warning: post_excel_file_creation failed for {workbook_name}: {e}", file=sys.stderr)
+                # Optionally, you might want to store the error in excel_info
+                excel_info[workbook_name]['post_excel_error'] = str(e)
+
+        return excel_info
+
+    def get_post_data(self) -> Dict[str, Any]:
+        return self.post_data
 
 def create_excel_to_google_workbook(workbook_name: str, config: Dict[str, Any]):
     """
@@ -275,6 +372,7 @@ def create_excel_to_google_workbook(workbook_name: str, config: Dict[str, Any]):
     from .workbooks.auto_dialer_workbook import AutoDialerWorkbook
     from .workbooks.filter_workbook import FilterWorkbook
     from .workbooks.base_workbook import BaseExcelToGoogleWorkbook
+    from .workbooks.callers_gaps_workbook import CallersGapWorkbook
     # Get config values with fallbacks for optional fields
     google_folder_id = config.get('google_folder_id', '')
     excel_file_pattern = config.get('file_name_pattern')
@@ -286,6 +384,7 @@ def create_excel_to_google_workbook(workbook_name: str, config: Dict[str, Any]):
         'intermidiate': IntermediateWorkbook,
         'auto_dialer': AutoDialerWorkbook,
         'filter': FilterWorkbook,
+        'callers_gap': CallersGapWorkbook,
     }
     
     # Get the appropriate class, default to BaseExcelToGoogleWorkbook if not found

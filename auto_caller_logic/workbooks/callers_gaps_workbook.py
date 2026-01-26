@@ -1,27 +1,32 @@
 """
-Auto Dialer workbook module.
+Callers Gap workbook module.
 
-Defines the Excel file structure for auto dialer files.
+Defines the Excel file structure for callers gap files.
 """
 
 import io, sys
 from .base_workbook import ExcelToGoogleWorkbook
 
 
-class AutoDialerWorkbook(ExcelToGoogleWorkbook):
-    """Workbook for auto dialer files."""
+class CallersGapWorkbook(ExcelToGoogleWorkbook):
+    """Workbook for callers gap files."""
     
     def __init__(self, google_sheet_folder_id: str, excel_file_pattern: str, google_wb_name: str, output_folder_path: str):
         super().__init__(google_sheet_folder_id, excel_file_pattern, google_wb_name, output_folder_path)
         self._formulas = {}  # Store formulas to add after upload
 
     def create_excel_file(self, **kwargs):
-        data = kwargs.get('customers')
-        if data is None:
-            raise ValueError("data is required")
+        return None
+
+    def post_excel_file_creation(self, **kwargs):
+        callers_gap = kwargs.get('callers_gap')
+        if callers_gap is None:
+            raise ValueError("callers_gap is required")
 
         try:
             from openpyxl import Workbook
+
+            print(f"Callers gap length: {len(callers_gap)}", file=sys.stderr)
             
             wb = Workbook()
             ws = wb.active
@@ -46,7 +51,7 @@ class AutoDialerWorkbook(ExcelToGoogleWorkbook):
                     ws.column_dimensions[column_letter].width = width
             
             # Write data starting from row 2
-            for idx, value in enumerate(data, start=2):
+            for idx, value in enumerate(callers_gap, start=2):
                 # Column A: data value
                 ws[f'A{idx}'] = value
                 
@@ -58,11 +63,16 @@ class AutoDialerWorkbook(ExcelToGoogleWorkbook):
 
             excel_buffer = io.BytesIO()
             wb.save(excel_buffer)
+
             excel_buffer.seek(0)
             return excel_buffer
 
             
         except ImportError:
             print(f"⚠️  Warning: openpyxl not available. Cannot create Excel file.", file=sys.stderr)
-    
-    
+            raise ImportError("openpyxl is required. Install it with: pip install openpyxl")
+        except Exception as e:
+            print(f"Error: {e}", file=sys.stderr)
+            print(f"Error type: {type(e).__name__}", file=sys.stderr)
+            raise RuntimeError(f"Error creating Callers Gap Excel workbook: {e}")
+

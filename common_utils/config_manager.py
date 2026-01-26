@@ -31,9 +31,11 @@ class ConfigManager:
         
         
         self.config_path = Path(config_path)
-        
+
         if not self.config_path.exists():
             raise FileNotFoundError(f"Config file not found: {self.config_path}")
+
+        self.load()
     
     def load(self) -> Dict[str, Any]:
         """
@@ -46,9 +48,22 @@ class ConfigManager:
             FileNotFoundError: If config file doesn't exist
             yaml.YAMLError: If config file is invalid
         """
-        with open(self.config_path, 'r', encoding='utf-8') as f:
-            config = yaml.safe_load(f)
-        return config or {}
+        try:
+            with open(self.config_path, 'r', encoding='utf-8') as f:
+                self.config = yaml.safe_load(f)
+        except Exception as e:
+            self.config = {}
+            print(f"Error loading config: {e}", file=sys.stderr)
+            raise RuntimeError(f"Error loading config: {e}")        
+    
+    def get_config(self) -> Dict[str, Any]:
+        """
+        Get the current configuration.
+        
+        Returns:
+            Dictionary containing the full configuration
+        """
+        return self.config
     
     def save_config(self, config: Dict[str, Any]) -> None:
         """
@@ -85,11 +100,13 @@ class ConfigManager:
                 print(f"Backup created: {backup_path}", file=sys.stderr)
         
         # Write updated config
-        print(f"Config path: {self.config_path} to save: {config}", file=sys.stderr)
         with open(self.config_path, 'w', encoding='utf-8') as f:
             yaml.dump(config, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+
+        self.load()
         
         print(f"Configuration saved to {self.config_path}", file=sys.stderr)
+
     
     
 

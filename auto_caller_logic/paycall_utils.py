@@ -9,18 +9,18 @@ import time
 from typing import Optional, Dict, Any, Tuple
 
 from .config import _get_default_config
-
+from common_utils.config_manager import ConfigManager
 from datetime import datetime
 
 
-def _load_paycall_config() -> Tuple[Dict[str, Any], Dict[str, Any], bool]:
+def _load_paycall_config(config_manager: ConfigManager) -> Tuple[Dict[str, Any], Dict[str, Any], bool]:
     """
     Load and validate PayCall configuration.
     
     Returns:
         Tuple of (config_dict, retry_config, is_valid)
     """
-    config = _get_default_config()
+    config = _get_default_config(config_manager)
     paycall_account = config.get_paycall_account()
     paycall_api_url = config.get_paycall_api_url()
     paycall_limit = config.get_paycall_limit()
@@ -226,15 +226,40 @@ def _parse_response(response: Any) -> Optional[list]:
     Returns:
         List of call records if successful, None otherwise
     """
+    # Check if response has content
+    if response is None:
+        print(f"⚠️  Response is None", file=sys.stderr)
+        raise Exception("Response object is None")
+    
+    if not response.text or response.text.strip() == '' or response.text.strip() == 'null' or response.text.strip() == 'undefined':
+        print(f"⚠️  Empty response from PayCall API (status {response.status_code})", file=sys.stderr)
+        return []
+    
     try:
         rows = response.json()
+    except ValueError as e:
+        # JSON decode error - response is not valid JSON
+        print(f"⚠️  Failed to parse PayCall response as JSON: {e}", file=sys.stderr)
+        print(f"   Response status: {response.status_code}", file=sys.stderr)
+        print(f"   Response text (first 500 chars): {response.text[:500]}", file=sys.stderr)
+        raise Exception(f"Failed to parse PayCall response as JSON: {e}")
     except Exception as e:
-        print(f"⚠️  Failed to parse PayCall response: {e} response: {response}", file=sys.stderr)
+        print(f"⚠️  Failed to parse PayCall response: {e}", file=sys.stderr)
+        print(f"   Response status: {response.status_code}", file=sys.stderr)
+        print(f"   Response text (first 500 chars): {response.text[:500]}", file=sys.stderr)
         raise Exception(f"Failed to parse PayCall response: {e}")
 
+    # Check if parsed data is a list
     if not isinstance(rows, list):
-        print(f"⚠️  Unexpected response format from PayCall response: {response}", file=sys.stderr)
-        raise Exception(f"Unexpected response format from PayCall")
+        print(f"⚠️  Unexpected response format from PayCall API response text: {response.text}", file=sys.stderr)
+        print(f"   Expected a list, got {type(rows).__name__}: {rows}", file=sys.stderr)
+        print(f"   Response status: {response.status_code}", file=sys.stderr)
+        # If it's a dict, it might be an error response
+        if isinstance(rows, dict):
+            print(f"   Response dict keys: {list(rows.keys())}", file=sys.stderr)
+            # Return empty list instead of raising - might be end of data
+            return []
+        raise Exception(f"Unexpected response format from PayCall: expected list, got {type(rows).__name__}")
 
     return rows
 
@@ -291,6 +316,7 @@ def _filter_calls_by_time(
 
 
 def get_paycall_data(
+    config_manager: ConfigManager,
     caller_id: Optional[str],
     start_date: Optional[datetime],
     end_date: Optional[datetime],
@@ -307,7 +333,7 @@ def get_paycall_data(
         List of rows (dict) parsed from the PayCall JSON response.
     """
     # Load configuration
-    config_dict, retry_config, is_valid = _load_paycall_config()
+    config_dict, retry_config, is_valid = _load_paycall_config(config_manager)
     if not is_valid:
         return []
 
@@ -342,7 +368,7 @@ def get_paycall_data(
             )
                 
         except Exception as e:
-            print(f"⚠️  Failed to fetch PayCall data: {e} response: {response}", file=sys.stderr)
+            print(f"⚠️  Failed to fetch PayCall data on page {page}: {e}", file=sys.stderr)
             raise
 
         # Parse response

@@ -14,13 +14,20 @@ from fastapi import APIRouter, HTTPException, Query, Depends
 from pydantic import BaseModel
 
 from common_utils.db_connection import DatabaseConnection
-from settings_backend.excel_handler import ExcelHandler
-from settings_backend.list_manager import ListManager
-from settings_backend.item_manager import ItemManager
+from common_utils.excel_handler import ExcelHandler
 from common_utils.config_manager import ConfigManager
+from common_utils.item_endpoints import (
+    AddItemRequest, AddItemResponse,
+    UpdateItemRequest, UpdateItemResponse,
+    RemoveItemRequest, RemoveItemResponse,
+    GetItemsResponse,
+    GetListsResponse, EditListRequest, EditListResponse,
+    get_db_connection, get_config,
+    add_item_endpoint, update_item_endpoint, remove_item_endpoint,
+    get_items_endpoint, get_lists_endpoint, edit_list_endpoint
+)
 
 router = APIRouter(prefix="/api/settings", tags=["settings-backend"])
-
 
 # Request/Response Models
 class ConvertTableToExcelRequest(BaseModel):
@@ -95,7 +102,7 @@ class ConvertTableToExcelResponse(BaseModel):
 
 class ConvertExcelToTableRequest(BaseModel):
     """Request model for Excel to MySQL conversion."""
-    table_name: str
+    table_name: Optional[str] = None
     file_content_base64: str  # Base64-encoded Excel file content
     sheet_name: Optional[str] = None
     header_row: int = 0
@@ -137,146 +144,44 @@ class ConvertExcelToTableResponse(BaseModel):
     rows_linked: int = 0  # Number of users linked to the list (if list_config provided)
 
 
-class ListInfo(BaseModel):
-    """Model for list information."""
-    id: int
-    list_name: str
-    is_active: Optional[int] = None
-    created_at: Optional[str] = None
-    time_activate_modify: Optional[str] = None
-    users: List[Dict[str, Any]] = []  # Array of user dictionaries
+# List models imported from common_utils.item_endpoints
+
+# Item and List models imported from common_utils.item_endpoints
 
 
-class GetListsResponse(BaseModel):
-    """Response model for get all lists endpoint."""
-    success: bool
-    lists: List[ListInfo] = []
-    error: Optional[str] = None
-    error_type: Optional[str] = None
-
-
-class EditListRequest(BaseModel):
-    """Request model for editing a list."""
-    list_id: int
-    list_name: Optional[str] = None  # New name for the list
-    is_active: Optional[int] = None  # 1 to activate, 0 to deactivate
-    add_users: Optional[List[int]] = None  # Array of user IDs to add to the list
-    remove_users: Optional[List[int]] = None  # Array of user IDs to remove from the list
-
-
-class EditListResponse(BaseModel):
-    """Response model for edit list endpoint."""
-    success: bool
-    list_id: int
-    list_name: Optional[str] = None
-    is_active: Optional[int] = None
-    users_added: int = 0
-    users_removed: int = 0
-    error: Optional[str] = None
-    error_type: Optional[str] = None
-
-
-class EditListRequest(BaseModel):
-    """Request model for editing a list."""
-    list_id: int
-    list_name: Optional[str] = None  # New name for the list
-    is_active: Optional[int] = None  # 1 to activate, 0 to deactivate
-    add_users: Optional[List[int]] = None  # Array of user IDs to add to the list
-    remove_users: Optional[List[int]] = None  # Array of user IDs to remove from the list
-
-
-class EditListResponse(BaseModel):
-    """Response model for edit list endpoint."""
-    success: bool
-    list_id: int
-    list_name: Optional[str] = None
-    is_active: Optional[int] = None
-    users_added: int = 0
-    users_removed: int = 0
-    error: Optional[str] = None
-    error_type: Optional[str] = None
-
-class GetItemsResponse(BaseModel):
-    """Response model for get items endpoint."""
-    success: bool
-    items: List[Dict[str, Any]] = []
-    error: Optional[str] = None
-    error_type: Optional[str] = None
-
-class AddItemRequest(BaseModel):
-    """Request model for adding an item."""
-    item_type: str  # Type key that matches data_base_tables configuration
-    field_values: Dict[str, Any]  # Dictionary mapping field names to values
-
-
-class AddItemResponse(BaseModel):
-    """Response model for add item endpoint."""
-    success: bool
-    item_id: Optional[Any] = None  # Primary key value of inserted item
-    error: Optional[str] = None
-    error_type: Optional[str] = None
-
-
-# Database connection instance (will be initialized on first use)
+# Module-specific instances (cached per module)
 _db_connection: Optional[DatabaseConnection] = None
-_excel_handler: Optional[ExcelHandler] = None
 _config_manager: Optional[ConfigManager] = None
+_excel_handler: Optional[ExcelHandler] = None
 
 def _get_db_connection() -> DatabaseConnection:
-    """
-    Get or create database connection instance.
-    
-    Reads database config from config_server.yaml or environment variables.
-    """
+    """Get or create database connection instance for this module."""
     global _db_connection
     
     if _db_connection is not None and _db_connection.is_connected():
         return _db_connection
     
-    # Try to load config from config_server.yaml
-    try:
-
-        config_manager = _get_config()
-        config = config_manager.load()
+    _db_connection = get_db_connection(
+        env_config_var='MAIN_CONFIG_PATH',
+        fallback_paths=[
+            str(Path(__file__).parent.parent / "config.yaml"),
+            str(Path(__file__).parent / "config.yaml")
+        ]
+    )
+    return _db_connection
         
-        # Get database config
-        db_config = config.get('database', {})
-        if not db_config:
-            raise ValueError(
-                "Database configuration not found in config file. "
-                "Please add 'database' section to config_server.yaml with: "
-                "host, port, user, password, database, charset, pool_size, max_overflow"
-            )
-        
-        # Validate required database config fields
-        required_fields = ['host', 'user', 'password', 'database']
-        missing_fields = [field for field in required_fields if not db_config.get(field)]
-        if missing_fields:
-            raise ValueError(
-                f"Missing required database configuration fields: {', '.join(missing_fields)}"
-            )
-        
-        # Get retry config (use same structure as paycall retry config)
-        retry_config = config.get('database', {}).get('retry', {
-            'max_retries': 3,
-            'backoff_factor': 1.0,
-            'retry_on_timeout': True
-        })
-
-
-        print(f"db_config: {db_config}")
-        print(f"retry_config: {retry_config}")
-        
-        _db_connection = DatabaseConnection(db_config, retry_config)
-        _db_connection.connect()
-        
-        return _db_connection
-        
-    except Exception as e:
-        error_msg = f"Failed to initialize database connection: {str(e)}"
-        print(f"✗ {error_msg}", file=sys.stderr)
-        raise HTTPException(status_code=500, detail=error_msg)
-
+def _get_config() -> ConfigManager:
+    """Get or create config manager instance for this module."""
+    global _config_manager
+    
+    if _config_manager is not None:
+        return _config_manager
+    
+    _config_manager = get_config(
+        env_config_var='SETTINGS_BACKEND_CONFIG_PATH',
+        fallback_paths=[str(Path(__file__).parent / "config.yaml")]
+    )
+    return _config_manager
 
 def _get_excel_handler() -> ExcelHandler:
     """Get or create Excel handler instance."""
@@ -287,21 +192,6 @@ def _get_excel_handler() -> ExcelHandler:
         _excel_handler = ExcelHandler(db_conn)
     
     return _excel_handler
-
-def _get_config() -> ConfigManager:
-    """Get or create config instance."""
-    global _config_manager
-    config_path = os.getenv('SETTINGS_BACKEND_CONFIG_PATH')
-
-    if _config_manager is None:
-        if not config_path:
-            # Default to config_server.yaml in project root
-            current_dir = Path(__file__).parent
-            config_path = current_dir / "config.yaml"
-            
-        _config_manager = ConfigManager(str(config_path))
-        
-    return _config_manager
 
 @router.post("/convert-table-to-excel", response_model=ConvertTableToExcelResponse)
 async def convert_table_to_excel(request: ConvertTableToExcelRequest):
@@ -518,14 +408,14 @@ async def convert_excel_to_table(
                 )
             
             # Get database connection and list manager
+            from common_utils.list_manager import ListManager
             db_connection = _get_db_connection()
-            confif = _get_config()
-            list_manager = ListManager(list_type, db_connection)
+            config_manager = _get_config()
+            list_manager = ListManager(list_type, db_connection, config_manager)
             
             # Execute 3-step process
             result = list_manager.import_excel_and_create_list(
                 file_path=temp_file_path,
-                table_name=request.table_name,
                 list_name=list_name,
                 sheet_name=request.sheet_name,
                 mapping=request.column_mapping,
@@ -630,34 +520,7 @@ async def get_all_lists(
                 - users: Array of user dictionaries with all user fields
             - error: Error message if operation failed
     """
-    try:
-        # Get database connection and list manager
-        db_connection = _get_db_connection()
-        config_manager = _get_config()
-        list_manager = ListManager(list_type, db_connection, config_manager)
-        
-        # Fetch all lists with users
-        lists = list_manager.get_all_lists_with_users()
-
-        print(f"lists: {lists}")
-        
-        return GetListsResponse(
-            success=True,
-            lists=lists,
-            error=None,
-            error_type=None
-        )
-        
-    except Exception as e:
-        error_type = type(e).__name__
-        error_msg = str(e)
-        print(f"✗ Error fetching lists: {error_msg}", file=sys.stderr)
-        return GetListsResponse(
-            success=False,
-            lists=[],
-            error=error_msg,
-            error_type=error_type
-        )
+    return await get_lists_endpoint(list_type, _get_db_connection, _get_config)
 
 
 @router.post("/lists/edit", response_model=EditListResponse)
@@ -687,67 +550,7 @@ async def edit_list(
             - users_removed: Number of users removed
             - error: Error message if operation failed
     """
-    try:
-        # Validate that at least one operation is requested
-        has_operation = (
-            request.list_name is not None or
-            request.is_active is not None or
-            request.add_users is not None or
-            request.remove_users is not None
-        )
-        
-        if not has_operation:
-            return EditListResponse(
-                success=False,
-                list_id=request.list_id,
-                error="At least one operation must be specified (list_name, is_active, add_users, or remove_users)",
-                error_type="ValueError"
-            )
-        
-        # Get database connection and list manager
-        db_connection = _get_db_connection()
-        list_manager = ListManager(list_type, db_connection)
-        
-        # Execute edit operations
-        result = list_manager.edit_list(
-            list_id=request.list_id,
-            list_name=request.list_name,
-            is_active=request.is_active,
-            add_users=request.add_users,
-            remove_users=request.remove_users
-        )
-        
-        if result.get('success', False):
-            return EditListResponse(
-                success=True,
-                list_id=result['list_id'],
-                list_name=result.get('list_name'),
-                is_active=result.get('is_active'),
-                users_added=result.get('users_added', 0),
-                users_removed=result.get('users_removed', 0),
-                error=None,
-                error_type=None
-            )
-        else:
-            errors = result.get('errors', [])
-            error_msg = '; '.join(errors) if errors else "Unknown error"
-            return EditListResponse(
-                success=False,
-                list_id=request.list_id,
-                error=error_msg,
-                error_type="OperationError"
-            )
-        
-    except Exception as e:
-        error_type = type(e).__name__
-        error_msg = str(e)
-        print(f"✗ Error editing list: {error_msg}", file=sys.stderr)
-        return EditListResponse(
-            success=False,
-            list_id=request.list_id if hasattr(request, 'list_id') else 0,
-            error=error_msg,
-            error_type=error_type
-        )
+    return await edit_list_endpoint(request, list_type, _get_db_connection, _get_config)
 
 
 @router.get("/items", response_model=GetItemsResponse)
@@ -769,30 +572,7 @@ async def get_items(
             - error: Error message if operation failed
             - error_type: Type of error if operation failed
     """
-    try:
-        db_connection = _get_db_connection()
-        config_manager = _get_config()
-        item_manager = ItemManager(item_type, db_connection, config_manager)
-
-        result = item_manager.get_items(include_foreign=include_foreign)
-
-        return GetItemsResponse(
-            success=result.get('success', False),
-            items=result.get('items', []),
-            error=result.get('error'),
-            error_type=result.get('error_type')
-        )
-
-    except Exception as e:
-        error_type = type(e).__name__
-        error_msg = str(e)
-        print(f"✗ Error fetching items: {error_msg}", file=sys.stderr)
-        return GetItemsResponse(
-            success=False,
-            items=[],
-            error=error_msg,
-            error_type=error_type
-        )
+    return await get_items_endpoint(item_type, include_foreign, _get_db_connection, _get_config)
 
 
 @router.post("/add-item", response_model=AddItemResponse)
@@ -816,32 +596,51 @@ async def add_item(request: AddItemRequest):
             - error: Error message if operation failed
             - error_type: Type of error if operation failed
     """
-    try:
-        # Get database connection and item manager
-        db_connection = _get_db_connection()
-        config_manager = _get_config()
-        item_manager = ItemManager(request.item_type, db_connection, config_manager)
+    return await add_item_endpoint(request, _get_db_connection, _get_config)
+
+
+@router.post("/update-item", response_model=UpdateItemResponse)
+async def update_item(request: UpdateItemRequest):
+    """
+    Update one or more rows in a database table (generic update).
+
+    - Table is derived from request.item_type via data_base_tables config.
+    - Rows are selected by exact-match filters in `where` (ANDed).
+    - Columns updated are taken from `field_values`.
+    """
+    return await update_item_endpoint(request, _get_db_connection, _get_config)
+
+
+@router.post("/remove-item", response_model=RemoveItemResponse)
+async def remove_item(request: RemoveItemRequest):
+    """
+    Remove (delete) one or more items from a database table.
+    
+    Validates that either `where` is provided or `item_id` is provided.
+    The item_type maps to a table_name via the data_base_tables configuration.
+    
+    Default behavior: If `where` is empty and `item_id` is provided, automatically
+    uses the primary key with `item_id` value for the WHERE clause.
+    
+    Args:
+        request: RemoveItemRequest with:
+            - item_type: Type key that matches data_base_tables configuration
+            - where: Dictionary mapping identifying fields to values (e.g., {"id": 123}).
+                     If empty and item_id is provided, will use primary key automatically.
+            - item_id: Optional primary key value to use when where is empty
         
-        # Add the item
-        result = item_manager.add_item(request.field_values)
-        
-        return AddItemResponse(
-            success=result.get('success', False),
-            item_id=result.get('item_id'),
-            error=result.get('error'),
-            error_type=result.get('error_type')
-        )
-        
-    except Exception as e:
-        error_type = type(e).__name__
-        error_msg = str(e)
-        print(f"✗ Error adding item: {error_msg}", file=sys.stderr)
-        return AddItemResponse(
-            success=False,
-            item_id=None,
-            error=error_msg,
-            error_type=error_type
-        )
+    Returns:
+        RemoveItemResponse with:
+            - success: bool
+            - rows_affected: Number of rows deleted
+            - error: Error message if operation failed
+            - error_type: Type of error if operation failed
+    """
+    return await remove_item_endpoint(request, _get_db_connection, _get_config)
+
+
+
+
 
 
 

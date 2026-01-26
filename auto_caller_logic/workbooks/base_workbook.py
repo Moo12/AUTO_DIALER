@@ -28,21 +28,29 @@ class ExcelToGoogleWorkbook(ABC):
         
         self.output_file_name = self.excel_file_pattern.format(date=date_str, time=time_str)
     
+    def post_excel_file_creation(self, **kwargs):
+        """
+        Post Excel file creation hook.
+        
+        Called after all initial Excel files have been created and uploaded to Google Drive.
+        This allows workbooks to create additional Excel files based on data from post_process().
+        
+        Args:
+            **kwargs: Data returned from BaseProcess.post_process() method.
+                     This typically contains processed data from the initial Excel files
+                     (e.g., {'callers_gap': [...]}).
+        
+        Returns:
+            BytesIO buffer containing the Excel file, or None if no post-excel file should be created.
+            If a buffer is returned, it will be automatically uploaded to Google Drive if
+            google_sheet_folder_id is configured.
+        """
+        return None
+    
     @abstractmethod
     def create_excel_file(self, **kwargs):
         """Create Excel file from data. Must be implemented by subclasses."""
         raise NotImplementedError("create_excel_file() must be implemented by subclass")
-
-    def save_excel_file(self, excel_buffer: io.BytesIO):
-        """Save Excel buffer to local file system."""
-        if self.output_local_folder_path:
-            os.makedirs(self.output_local_folder_path, exist_ok=True)
-            self.output_file_path = os.path.join(self.output_local_folder_path, self.output_file_name)
-            with open(self.output_file_path, 'wb') as f:
-                f.write(excel_buffer.getvalue())
-            return self.output_file_path
-        else:
-            return None
 
 
 class BaseExcelToGoogleWorkbook(ExcelToGoogleWorkbook):
