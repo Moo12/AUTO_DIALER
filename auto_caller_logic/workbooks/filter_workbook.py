@@ -15,8 +15,8 @@ from datetime import datetime
 class FilterWorkbook(ExcelToGoogleWorkbook):
     """Workbook for filter files."""
 
-    def __init__(self, google_sheet_folder_id: str, excel_file_pattern: str, google_wb_name: str, output_folder_path: str):
-        super().__init__(google_sheet_folder_id, excel_file_pattern, google_wb_name, output_folder_path)
+    def __init__(self, google_sheet_folder_id: str, excel_file_pattern: str, google_wb_name: str):
+        super().__init__(google_sheet_folder_id, excel_file_pattern, google_wb_name)
         self._formulas = {}
         
         self.main_sheet_name = "פילטר חייגן"  # Store formulas to add after upload
@@ -70,7 +70,8 @@ class FilterWorkbook(ExcelToGoogleWorkbook):
             ws_summary.sheet_view.rightToLeft = True
 
             # Use summarize_data passed from generate_data
-            date_str, time_str, customers_input_file_val, caller_id_val = summarize_data
+
+            date_str, time_str, customers_input_file_val, caller_id_val, nick_name_val = summarize_data
 
             ws_summary['A1'] = date_str
             ws_summary['A2'] = time_str

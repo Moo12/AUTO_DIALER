@@ -91,9 +91,10 @@ class GDriveService:
         print(f"✅ File uploaded. ID: {file_id}", file=sys.stderr)
         return file_id
     
-    def get_latest_file_by_pattern(self, folder_id: str, file_name_pattern: str) -> Optional[str]:
+    def get_latest_file_by_pattern(self, folder_id: str, file_name_pattern: str):
         """
         Get the latest file from Google Drive folder that matches the filename pattern.
+        Also returns the first sheet ID from the spreadsheet.
         
         The pattern may contain placeholders like {date} and {time}, which will be converted
         to regex patterns to match files.
@@ -103,7 +104,8 @@ class GDriveService:
             file_name_pattern: Filename pattern (e.g., "CUSTOMERS_{date}_{time}.xlsx")
             
         Returns:
-            File ID (str) of the latest matching file, or None if not found
+            Tuple of (file_id, file_name, first_sheet_id) or None if not found.
+            first_sheet_id will be None if the file is not a Google Sheet or if there are no sheets.
         """
         import re
         from datetime import datetime
@@ -149,10 +151,58 @@ class GDriveService:
         # Get the latest file (already sorted by modifiedTime desc, so first one is latest)
         latest_file = matching_files[0]
         file_id = latest_file['id']
+        file_name = latest_file['name']
         
+        # Get the first sheet ID from the spreadsheet
+        first_sheet_id = None
+        try:
+            spreadsheet = self.sheets_service.spreadsheets().get(
+                spreadsheetId=file_id
+            ).execute()
+            
+            sheets = spreadsheet.get('sheets', [])
+            if sheets:
+                first_sheet_id = sheets[0]['properties']['sheetId']
+                print(f"✅ Found first sheet ID: {first_sheet_id} for file {file_name}", file=sys.stderr)
+            else:
+                print(f"⚠️  Warning: No sheets found in spreadsheet {file_id}", file=sys.stderr)
+        except Exception as e:
+            print(f"⚠️  Warning: Could not get sheet ID for file {file_id}: {e}", file=sys.stderr)
+            # Continue - first_sheet_id will remain None
         
-        print(f"✅ Found latest file: {latest_file['name']} (ID: {file_id})", file=sys.stderr)
-        return file_id, latest_file['name']
+        print(f"✅ Found latest file: {file_name} (ID: {file_id})", file=sys.stderr)
+        return file_id, file_name, first_sheet_id
+    
+    def get_sheet_id_by_name(self, spreadsheet_id: str, sheet_name: str) -> Optional[int]:
+        """
+        Get the sheet ID for a given sheet name in a spreadsheet.
+        
+        Args:
+            spreadsheet_id: Google Sheets spreadsheet ID
+            sheet_name: Name of the sheet
+            
+        Returns:
+            Sheet ID (integer) if found, None otherwise
+            
+        Raises:
+            ValueError: If spreadsheet not found or API error occurs
+        """
+        try:
+            spreadsheet = self.sheets_service.spreadsheets().get(
+                spreadsheetId=spreadsheet_id
+            ).execute()
+            
+            for sheet in spreadsheet.get('sheets', []):
+                if sheet['properties']['title'] == sheet_name:
+                    sheet_id = sheet['properties']['sheetId']
+                    print(f"✅ Found sheet ID: {sheet_id} for sheet name '{sheet_name}' in spreadsheet {spreadsheet_id}", file=sys.stderr)
+                    return sheet_id
+            
+            print(f"⚠️  Warning: Sheet '{sheet_name}' not found in spreadsheet {spreadsheet_id}", file=sys.stderr)
+            return None
+        except Exception as e:
+            print(f"⚠️  Error getting sheet ID by name: {e}", file=sys.stderr)
+            raise ValueError(f"Could not get sheet ID for sheet '{sheet_name}' in spreadsheet {spreadsheet_id}: {e}")
     
     def add_formulas_to_sheet(self, spreadsheet_id, formulas):
         """
@@ -219,12 +269,17 @@ class BaseProcess(ABC):
 
         self.drive_service = drive_service
 
+        self.generated_data = {}
+
         self.post_data = {}
         
     @abstractmethod
     def generate_data(self, **kwargs):
         """The specific logic to create the file content."""
         pass
+
+    def get_generated_data(self) -> Dict[str, Any]:
+        return self.generated_data
 
     def post_process_implementation(self, excel_info: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return None
@@ -257,7 +312,7 @@ class BaseProcess(ABC):
 
     def run(self, **kwargs):
         data = self.generate_data(**kwargs)
-        
+        self.generated_data = data
         # Ensure data is a dictionary
         if not isinstance(data, dict):
             raise ValueError(f"generate_data() must return a dictionary, got {type(data)}")
@@ -265,6 +320,8 @@ class BaseProcess(ABC):
         file_ids = []
 
         excel_info = {}
+
+
         for workbook_name, excel_to_google_workbook in self.excel_to_google_workbook.items():
 
             print(f"Creating excel file for {workbook_name}", file=sys.stderr)
@@ -275,7 +332,7 @@ class BaseProcess(ABC):
 
             excel_info[workbook_name] = {
                 'file_name': file_name,
-                'excel_buffer': excel_buffer
+                'excel_buffer': excel_buffer,
             }
 
             if excel_to_google_workbook.google_sheet_folder_id is not None and excel_buffer is not None:
@@ -284,6 +341,10 @@ class BaseProcess(ABC):
                     file_name=file_name,
                     excel_buffer=excel_buffer,
                 )
+
+                sheet_id = None
+                if file_id is not None and excel_to_google_workbook.google_wb_name:
+                    sheet_id = self.drive_service.get_sheet_id_by_name(file_id, excel_to_google_workbook.google_wb_name)
 
                 if file_id is not None:
                     file_ids.append(file_id)                
@@ -295,6 +356,7 @@ class BaseProcess(ABC):
                         )
 
                 excel_info[workbook_name]['file_id'] = file_id
+                excel_info[workbook_name]['sheet_id'] = sheet_id
         
         # Post-process: get additional data needed for post-excel file creation
         # Note: post_process() is OPTIONAL - subclasses don't have to implement it.
@@ -313,9 +375,6 @@ class BaseProcess(ABC):
         for workbook_name, excel_to_google_workbook in self.excel_to_google_workbook.items():
             try:
                 excel_buffer = excel_to_google_workbook.post_excel_file_creation(**post_data)
-
-                print(f"google folder id {excel_to_google_workbook.google_sheet_folder_id}", file=sys.stderr)
-                
                 
                 # Only store if a buffer was created
                 if excel_buffer is not None:
@@ -377,7 +436,6 @@ def create_excel_to_google_workbook(workbook_name: str, config: Dict[str, Any]):
     google_folder_id = config.get('google_folder_id', '')
     excel_file_pattern = config.get('file_name_pattern')
     google_wb_name = config.get('google_wb_name', workbook_name)
-    output_folder_path = config.get('output_folder_path', '')
     
     # Map workbook names to their corresponding classes
     workbook_class_map = {
@@ -394,6 +452,5 @@ def create_excel_to_google_workbook(workbook_name: str, config: Dict[str, Any]):
         google_sheet_folder_id=google_folder_id,
         excel_file_pattern=excel_file_pattern,
         google_wb_name=google_wb_name,
-        output_folder_path=output_folder_path,
     )
 

@@ -38,6 +38,7 @@ class CreateFilterRequest(BaseModel):
     start_date: str  # Format: "dd-mm-YYYY HH:MM:SS"
     end_date: str    # Format: "dd-mm-YYYY HH:MM:SS"
     customers_input_file: Optional[str] = None  # Base64 encoded file content (optional)
+    customers_input_file_name: Optional[str] = None
 
 
 class CreateFilterResponse(BaseModel):
@@ -54,7 +55,6 @@ class ImportCustomersResponse(BaseModel):
     success: bool
     excel_buffer: Optional[str] = None
     file_name: Optional[str] = None
-    counter: Optional[int] = None
     error: Optional[str] = None
     error_type: Optional[str] = None
 
@@ -73,11 +73,10 @@ class GetSettingsResponse(BaseModel):
     error_type: Optional[str] = None
 
 class ModifySettingsRequest(BaseModel):
-    customers_sheets_config: Optional[Dict[str, SheetConfig]] = None  # Dictionary where keys are sheet names ("sheet_1", "sheet_2") and values are SheetConfig
+    customers_sheets_config: Optional[Dict[str, Dict[str, Any]]] = None  # Dictionary where keys are sheet names ("sheet_1", "sheet_2") and values are sheet configs (can include "url" key)
     filter_sheets_config: Optional[Dict[str, Dict[str, Any]]] = None  # Dictionary where keys are sheet names ("allowed_gaps_sheet", "gaps_sheet") and values are sheet configs
     main_google_folder_id: Optional[str] = None  # Main Google folder ID to update
     gaps_sheet_config: Optional[Dict[str, Any]] = None  # Gaps sheet configuration to update
-
 
 class ModifySettingsResponse(BaseModel):
     success: bool
@@ -123,6 +122,41 @@ def _get_config():
         ]
     )
     return _config_manager
+
+
+def _get_caller_nick_name(phone_number: str) -> Optional[str]:
+    """
+    Get nick_name from auto_calls_callers table by phone_number.
+    
+    Args:
+        phone_number: Phone number (caller_id) to look up
+        
+    Returns:
+        nick_name if found, None otherwise
+    """
+    try:
+        db_connection = _get_db_connection()
+        
+        # Query the database
+        query = "SELECT nick_name FROM auto_calls_callers WHERE phone_number = :phone_number LIMIT 1"
+        results = db_connection.execute_query(query, {'phone_number': phone_number})
+        
+        if results and len(results) > 0:
+            nick_name = results[0].get('nick_name')
+            if nick_name:
+                print(f"📞 Found nick_name '{nick_name}' for phone_number '{phone_number}'", file=sys.stderr)
+                return nick_name
+            else:
+                print(f"📞 No nick_name found for phone_number '{phone_number}' (nick_name is NULL)", file=sys.stderr)
+                return None
+        else:
+            print(f"📞 No record found for phone_number '{phone_number}'", file=sys.stderr)
+            return None
+            
+    except Exception as e:
+        print(f"⚠️  Error fetching nick_name from database: {e}", file=sys.stderr)
+        # Don't raise - return None to fall back to caller_id
+        return None
 
 
 # Simple SQLite-backed counter store
@@ -178,7 +212,7 @@ async def create_filter(request: CreateFilterRequest):
         end_date = datetime.strptime(request.end_date, "%d-%m-%Y %H:%M:%S")
 
         # Handle file content if provided
-        customers_input_file_path = None
+        customers_input_file = None
         if request.customers_input_file:
             file_content = base64.b64decode(request.customers_input_file)
             temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx')
@@ -186,6 +220,7 @@ async def create_filter(request: CreateFilterRequest):
             temp_file.close()
             temp_file_path = temp_file.name
             customers_input_file_path = temp_file_path
+            customers_input_file = { "file_name": request.customers_input_file_name, "file_path": customers_input_file_path }
 
         config_manager = _get_config()
 
@@ -197,13 +232,18 @@ async def create_filter(request: CreateFilterRequest):
             end_date=end_date
         )
 
+        nick_name = _get_caller_nick_name(request.caller_id)
+
+
+
         # Create filter
         config_manager = _get_config()
         filter_google_manager = create_filter_google_manager(config_manager)
         process_result = filter_google_manager.run(
             calls=calls,
-            customers_input_file=customers_input_file_path,
-            caller_id=request.caller_id
+            customers_input_file= customers_input_file,
+            caller_id=request.caller_id,
+            nick_name=nick_name
         )
 
         filter_excel_info = process_result['filter']
@@ -273,6 +313,12 @@ async def import_customers():
 
         print(f"Process result: {process_result}", file=sys.stderr)
 
+        customers = customers_file.get_generated_data().get('customers')
+
+        number_of_customers = 0
+
+        if customers is not None:
+            number_of_customers = len(customers)
 
         file_name = process_result['auto_dialer']['file_name']
 
@@ -285,13 +331,14 @@ async def import_customers():
         excel_base64 = base64.b64encode(excel_buffer.getvalue()).decode('utf-8')
 
         counter = _increment_counter("import_customers")
+
+        file_name = f"{counter:02d} NUMBER {number_of_customers} {file_name}"
         print(f"Counter: {counter}", file=sys.stderr)
 
         return ImportCustomersResponse(
             success=True,
             excel_buffer=excel_base64,
-            counter=counter,
-            file_name=file_name
+            file_name=file_name,
         )
 
     except Exception as e:
@@ -338,7 +385,7 @@ async def get_settings(settings_config: str = Query(..., description="JSON dicti
             else:
                 customers_sheet_names = [s.strip() for s in customers_sheets_config_str.split(',')]
 
-            customers_sheets_config_res = config.get_customers_input_sheets(customers_sheet_names)
+            customers_sheets_config_res = config.get_input_user_display("customers", customers_sheet_names)
             config_response["customers_sheets_config"] = customers_sheets_config_res
 
         if 'filter_sheets_config' in settings_config_dict:
@@ -349,11 +396,17 @@ async def get_settings(settings_config: str = Query(..., description="JSON dicti
             else:
                 filter_sheet_names = [s.strip() for s in filter_sheets_config_str.split(',')]
 
-            filter_sheets_config_res = config.get_filter_input_sheets(filter_sheet_names)
+            filter_sheets_config_res = config.get_input_user_display("filter", filter_sheet_names)
             config_response["filter_sheets_config"] = filter_sheets_config_res
 
         if 'gaps_sheet_config' in settings_config_dict:
-            gaps_sheet_config_res = config.get_gaps_sheet_config()
+            gaps_sheet_config_str = settings_config_dict['gaps_sheet_config']
+            if gaps_sheet_config_str == 'all':
+                gaps_sheet_config_names = ['gaps_sheet_archive', 'gaps_sheet_runs']
+            else:
+                gaps_sheet_config_names = [s.strip() for s in gaps_sheet_config_str.split(',')]
+
+            gaps_sheet_config_res = config.get_output_files_config_used_display_by_name("filter", gaps_sheet_config_names)
             config_response["gaps_sheet_config"] = gaps_sheet_config_res
 
         if "main_google_folder_id" in settings_config_dict:
@@ -395,19 +448,10 @@ async def modify_settings(request: ModifySettingsRequest):
         # Handle customers_sheets_config
         if 'customers_sheets_config' in request_dict:
             customers_sheets_config = request_dict['customers_sheets_config']
-            # Convert SheetConfig objects to dicts if needed
             if customers_sheets_config:
-                sheets_config_dict = {}
-                for sheet_name, sheet_config in customers_sheets_config.items():
-                    if isinstance(sheet_config, dict):
-                        sheets_config_dict[sheet_name] = sheet_config
-                    else:
-                        # Convert SheetConfig Pydantic model to dict
-                        sheets_config_dict[sheet_name] = sheet_config.dict() if hasattr(sheet_config, 'dict') else sheet_config
-                
-                config.update_customers_input_sheet(sheets_config_dict)
+                config.update_customers_input_sheet(customers_sheets_config)
                 updated_items.append('customers_sheets_config')
-                config_response['customers_sheets_config'] = sheets_config_dict
+                config_response['customers_sheets_config'] = customers_sheets_config
         
         # Handle filter_sheets_config
         if 'filter_sheets_config' in request_dict:
@@ -429,7 +473,7 @@ async def modify_settings(request: ModifySettingsRequest):
         if 'gaps_sheet_config' in request_dict:
             gaps_sheet_config = request_dict['gaps_sheet_config']
             if gaps_sheet_config:
-                config.update_gaps_sheet_config(gaps_sheet_config)
+                config.update_output_files("filter", gaps_sheet_config)
                 updated_items.append('gaps_sheet_config')
                 config_response['gaps_sheet_config'] = gaps_sheet_config
         

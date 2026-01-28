@@ -41,15 +41,15 @@ def example_get_sheet_config():
     config = _get_default_config()
     
     # Get sheet_1 config
-    sheet_1 = config.get_customers_input_sheets(['sheet_1'])
+    sheet_1 = config.get_input_user_display("customers", ['sheet_1'])
     print(f"Sheet 1 config: {sheet_1}")
     
     # Get sheet_2 config
-    sheet_2 = config.get_customers_input_sheets(['sheet_2'])
+    sheet_2 = config.get_input_user_display("customers", ['sheet_2'])
     print(f"Sheet 2 config: {sheet_2}")
     
     # Get all sheets
-    all_sheets = config.get_customers_input_sheets(['sheet_1', 'sheet_2'])
+    all_sheets = config.get_input_user_display("customers", ['sheet_1', 'sheet_2'])
     print(f"All sheets: {all_sheets}")
 
 
@@ -128,7 +128,7 @@ def main():
             sheet_names = [s.strip() for s in args.get_sheets.split(',')]
         
         try:
-            sheets_config = config.get_customers_input_sheets(sheet_names)
+            sheets_config = config.get_input_user_display("customers", sheet_names)
             print(f"Retrieved configuration for {', '.join(sheet_names)}", file=sys.stderr)
         except Exception as e:
             raise ValueError(f"Error getting sheets configuration: {e}")

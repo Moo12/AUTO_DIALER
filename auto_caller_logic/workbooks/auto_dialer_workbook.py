@@ -11,8 +11,8 @@ from .base_workbook import ExcelToGoogleWorkbook
 class AutoDialerWorkbook(ExcelToGoogleWorkbook):
     """Workbook for auto dialer files."""
     
-    def __init__(self, google_sheet_folder_id: str, excel_file_pattern: str, google_wb_name: str, output_folder_path: str):
-        super().__init__(google_sheet_folder_id, excel_file_pattern, google_wb_name, output_folder_path)
+    def __init__(self, google_sheet_folder_id: str, excel_file_pattern: str, google_wb_name: str):
+        super().__init__(google_sheet_folder_id, excel_file_pattern, google_wb_name)
         self._formulas = {}  # Store formulas to add after upload
 
     def create_excel_file(self, **kwargs):

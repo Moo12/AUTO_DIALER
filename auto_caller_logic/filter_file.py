@@ -8,10 +8,12 @@ with Hebrew headers and ARRAYFORMULA formulas.
 import io
 import sys
 import os
-from typing import Dict, Any
+from typing import Dict, Any, Optional
+from pathlib import Path
 from .google_drive_utils import BaseProcess
 from .config import _get_default_config
 from common_utils.config_manager import ConfigManager
+from common_utils.item_endpoints import get_db_connection
 class FilterFile(BaseProcess):
 
     def __init__(self, drive_service, config_manager: ConfigManager, customers_google_folder_id: str, customers_file_name_pattern: str, auto_dialer_file_name_pattern: str, gaps_sheet_config: Dict[str, Any], allowed_gaps_sheet_config: Dict[str, Any]):
@@ -38,6 +40,7 @@ class FilterFile(BaseProcess):
             calls = kwargs.get('calls')
             caller_id = kwargs.get('caller_id')
             input_file_path = kwargs.get('customers_input_file')
+            nick_name = kwargs.get('nick_name')
             customers, customers_input_file = self._get_customers(input_file_path)
 
             print(f"Input file path: {customers_input_file} caller id: {caller_id}", file=sys.stderr)
@@ -47,7 +50,7 @@ class FilterFile(BaseProcess):
             current_datetime = datetime.now()
             date_str = current_datetime.strftime("%d.%m.%Y")
             time_str = current_datetime.strftime("%H.%M")
-            summarize_data = [date_str, time_str, customers_input_file, caller_id]
+            summarize_data = [date_str, time_str, customers_input_file, caller_id, nick_name]
             
             # Store for later use in gaps sheet insertion
             self._summarize_data = summarize_data
@@ -73,13 +76,13 @@ class FilterFile(BaseProcess):
             raise ValueError("Filter workbook info is not found in excel_info")
         
         filter_google_sheet_id = filter_info.get('file_id')
-
+        filter_google_sheet_first_sheet_id = filter_info.get('sheet_id')
         print(f"Filter Google sheet ID: {filter_google_sheet_id}", file=sys.stderr)
 
         if filter_google_sheet_id is None:
             raise ValueError("Filter Google sheet ID is not found")
 
-        callers_gap = self.get_list_of_missing_customers(filter_google_sheet_id)
+        callers_gap = self.get_list_of_missing_customers(filter_google_sheet_id, filter_google_sheet_first_sheet_id)
 
         print (f"finished .... post process implementation. len of callers gap: {len(callers_gap)}", file=sys.stderr)
         
@@ -106,11 +109,39 @@ class FilterFile(BaseProcess):
 
         return {'callers_gap': callers_gap, 'global_gap_sheet_config': self.gaps_sheet_config}
     
+    def _get_sheet_name_from_id(self, spreadsheet_id: str, sheet_id: int) -> str:
+        """
+        Get the sheet name for a given sheet ID.
+        
+        Args:
+            spreadsheet_id: Google Sheets spreadsheet ID
+            sheet_id: Sheet ID (integer)
+            
+        Returns:
+            Sheet name (string)
+            
+        Raises:
+            ValueError: If sheet not found
+        """
+        try:
+            spreadsheet = self.drive_service.sheets_service.spreadsheets().get(
+                spreadsheetId=spreadsheet_id
+            ).execute()
+            
+            for sheet in spreadsheet.get('sheets', []):
+                if sheet['properties']['sheetId'] == sheet_id:
+                    return sheet['properties']['title']
+            
+            raise ValueError(f"Sheet with ID {sheet_id} not found in spreadsheet {spreadsheet_id}")
+        except Exception as e:
+            print(f"⚠️  Error getting sheet name from ID: {e}", file=sys.stderr)
+            raise
+    
     def _read_column_from_google_sheet(
         self, 
         spreadsheet_id: str, 
         range_name: str, 
-        sheet_name: str = None,
+        sheet_id: int = None,
         skip_header_rows: int = 0,
         extract_column_index: int = None,
         flatten: bool = True
@@ -121,7 +152,8 @@ class FilterFile(BaseProcess):
         Args:
             spreadsheet_id: Google Sheets spreadsheet ID
             range_name: Range to read (e.g., "A:A", "A1:A100", "D2:D", or "'Sheet1'!A:A" if sheet name is included)
-            sheet_name: Optional sheet name (if None and range_name doesn't include sheet name, uses default sheet)
+            sheet_id: Optional sheet ID (integer). If provided, will convert to sheet name for the range.
+                      If None and range_name doesn't include sheet name, uses default sheet
             skip_header_rows: Number of header rows to skip (default 0)
             extract_column_index: If specified, extract only this column index (0-based). 
                                   If None, returns all columns as nested lists
@@ -137,9 +169,13 @@ class FilterFile(BaseProcess):
             if '!' in range_name:
                 # Range already includes sheet name, use it as-is
                 full_range = range_name
+            elif sheet_id is not None:
+                # Convert sheet_id to sheet_name and construct range
+                sheet_name = self._get_sheet_name_from_id(spreadsheet_id, sheet_id)
+                full_range = f"'{sheet_name}'!{range_name}"
             else:
-                # Construct full range name with sheet name if provided
-                full_range = f"'{sheet_name}'!{range_name}" if sheet_name else range_name
+                # Use range as-is (default sheet)
+                full_range = range_name
             
             print(f"📖 Reading from Google Sheet {spreadsheet_id}, range: {full_range}", file=sys.stderr)
             
@@ -190,11 +226,11 @@ class FilterFile(BaseProcess):
             return set()
         
         wb_id = self.allowed_gaps_sheet_config.get('wb_id')
-        sheet_name = self.allowed_gaps_sheet_config.get('sheet_name')
+        sheet_id = self.allowed_gaps_sheet_config.get('sheet_id')
         content_column_letter = self.allowed_gaps_sheet_config.get('content_column_letter', 'A')
         
-        if not wb_id or not sheet_name:
-            print(f"⚠️  Allowed gaps sheet config missing wb_id or sheet_name: {self.allowed_gaps_sheet_config}", file=sys.stderr)
+        if not wb_id or sheet_id is None:
+            print(f"⚠️  Allowed gaps sheet config missing wb_id or sheet_id: {self.allowed_gaps_sheet_config}", file=sys.stderr)
             return set()
         
         try:
@@ -205,7 +241,7 @@ class FilterFile(BaseProcess):
             all_values = self._read_column_from_google_sheet(
                 spreadsheet_id=wb_id,
                 range_name=column_range,
-                sheet_name=sheet_name,
+                sheet_id=sheet_id,
                 skip_header_rows=1,  # Skip header row
                 extract_column_index=0,  # Extract first (and only) column
             )
@@ -247,128 +283,254 @@ class FilterFile(BaseProcess):
     
     def _insert_data_to_gaps_sheet(self, callers_gap: list, allowed_gaps: set):
         """
-        Insert data into the gaps Google Sheet.
-        Inserts a new column at position A (shifts all columns right),
-        writes header values in A1-A4, and caller_gap data starting from A6.
-        Colors cells red if the value is in the allowed_gaps set.
+        Insert data into all gaps Google Sheets configured in gaps_sheet_config.
+        Filters callers_gap to exclude items in allowed_gaps, then iterates over each 
+        sub-item in gaps_sheet_config and inserts filtered data into each sheet.
         
         Args:
             callers_gap: List of caller gap values to insert
-            allowed_gaps: Set of allowed gap values (4-digit strings) that should be colored red
+            allowed_gaps: Set of allowed gap values (4-digit strings) - these will be excluded
         """
         if not self.gaps_sheet_config:
             print("⚠️  Gaps sheet config is not set, skipping insertion", file=sys.stderr)
             return
         
-        wb_id = self.gaps_sheet_config.get('wb_id')
-        sheet_name = self.gaps_sheet_config.get('sheet_name')
+        # Filter callers_gap to exclude items in allowed_gaps
+        filtered_gaps = [
+            str(item).strip() for item in callers_gap 
+            if str(item).strip() not in allowed_gaps
+        ]
         
-        if not wb_id or not sheet_name:
-            print(f"⚠️  Gaps sheet config missing wb_id or sheet_name: {self.gaps_sheet_config}", file=sys.stderr)
+        if not filtered_gaps:
+            print(f"⚠️  No gaps to insert (all {len(callers_gap)} were filtered out by allowed_gaps)", file=sys.stderr)
             return
         
+        print(f"📝 Filtered {len(callers_gap)} gaps to {len(filtered_gaps)} gaps (excluded {len(callers_gap) - len(filtered_gaps)} in allowed_gaps)", file=sys.stderr)
+
+        
+        
+        # Iterate over each sub-item in gaps_sheet_config (e.g., 'gaps_sheet', 'gaps_sheet_runs')
+        for sheet_name_key, sheet_config in self.gaps_sheet_config.items():
+            if not isinstance(sheet_config, dict):
+                print(f"⚠️  Skipping {sheet_name_key}: config is not a dictionary", file=sys.stderr)
+                continue
+            
+            wb_id = sheet_config.get('wb_id')
+            sheet_id = sheet_config.get('sheet_id')
+            
+            if not wb_id or sheet_id is None:
+                print(f"⚠️  Skipping {sheet_name_key}: missing wb_id or sheet_id: {sheet_config}", file=sys.stderr)
+                continue
+            
+            print(f"📝 Processing gaps sheet: {sheet_name_key} (wb_id: {wb_id}, sheet_id: {sheet_id})", file=sys.stderr)
+            try:
+                self._insert_data_to_single_gaps_sheet(sheet_config, filtered_gaps, sheet_name_key)
+            except Exception as e:
+                print(f"⚠️  Error inserting data to {sheet_name_key}: {e}", file=sys.stderr)
+                # Continue with other sheets even if one fails
+                continue
+    
+    def _insert_data_to_single_gaps_sheet(self, sheet_config: Dict[str, Any], filtered_gaps: list, sheet_name_key: str = None):
+        """
+        Insert data into a single gaps Google Sheet.
+        Inserts each gap as a row starting from the next empty line. Each row contains:
+        - Column A: caller gap
+        - Column B: empty (untouched)
+        - Column C: caller_id
+        - Column D: date
+        - Column E: time
+        - Column F: customers_input_file
+        
+        Args:
+            sheet_config: Dictionary containing sheet configuration with keys 'wb_id' and 'sheet_id'
+            filtered_gaps: List of already filtered caller gap values to insert (items in allowed_gaps have been excluded)
+            sheet_name_key: Optional name/key of the sheet config (for logging)
+        """
         try:
-            # Step 1: Insert a new column at position A (index 0)
-            # This will shift all existing columns to the right
-            print(f"📝 Inserting column at position A in gaps sheet {wb_id}, sheet '{sheet_name}'", file=sys.stderr)
+            # Extract wb_id and sheet_id from config
+            wb_id = sheet_config.get('wb_id')
+            sheet_id = sheet_config.get('sheet_id')
             
-            insert_dimension_request = {
-                'insertDimension': {
-                    'range': {
-                        'sheetId': self._get_sheet_id(wb_id, sheet_name),
-                        'dimension': 'COLUMNS',
-                        'startIndex': 0,  # Insert at column A (index 0)
-                        'endIndex': 1    # Insert 1 column
-                    },
-                    'inheritFromBefore': False
-                }
-            }
+            if not wb_id or sheet_id is None:
+                raise ValueError(f"Sheet config missing wb_id or sheet_id: {sheet_config}")
             
-            batch_update_body = {
-                'requests': [insert_dimension_request]
-            }
+            # Get sheet name from sheet_id for range construction
+            sheet_name = self._get_sheet_name_from_id(wb_id, sheet_id)
             
-            self.drive_service.sheets_service.spreadsheets().batchUpdate(
-                spreadsheetId=wb_id,
-                body=batch_update_body
-            ).execute()
+            log_prefix = f"[{sheet_name_key}] " if sheet_name_key else ""
             
-            print(f"✅ Column inserted successfully", file=sys.stderr)
+            if not filtered_gaps:
+                print(f"{log_prefix}⚠️  No gaps to insert (filtered list is empty)", file=sys.stderr)
+                return
             
-            # Step 2: Write header values (A1-A4) and caller_gap data (A6 onwards)
+            # Step 1: Find the first empty row in column A
+            first_empty_row = self._find_first_empty_row(wb_id, sheet_id, sheet_name)
+            print(f"{log_prefix}📝 First empty row found at row {first_empty_row}", file=sys.stderr)
+            
+            # Step 1.5: Check if space_row is enabled - if so, skip the first empty row
+            if sheet_config.get('space_row') is True and first_empty_row > 2:
+                start_row = first_empty_row + 1
+                print(f"{log_prefix}📝 space_row is enabled, data will start from row {start_row} (skipping row {first_empty_row})", file=sys.stderr)
+            else:
+                start_row = first_empty_row
+            
+            # Step 2: Prepare data from summarize_data
             if not self._summarize_data:
                 raise ValueError("summarize_data is not available. Make sure generate_data was called first.")
             
-            header_values = self._summarize_data
+            summarize_data = self._summarize_data
+            # summarize_data format: [date, time, customers_input_file, caller_id, nick_name]
+            date = summarize_data[0]
+            time = summarize_data[1]
+            customers_input_file = summarize_data[2]
+            caller_id = summarize_data[3]
+            nick_name = summarize_data[4] if len(summarize_data) > 4 else None
             
-            # Prepare values: A1-A4 are headers, A5 is empty, A6 onwards are caller_gap items
-            values = [
-                [header_values[0]],  # A1: date
-                [header_values[1]],   # A2: time
-                [header_values[2]],   # A3: customers_input_file
-                [header_values[3]],   # A4: caller_id
-                [''],                 # A5: empty
+            # Use nick_name if available, otherwise fall back to caller_id
+            caller_display = nick_name if nick_name else caller_id
+            
+            # Step 3: Get start column for gap info from config
+            start_column_gap_info = sheet_config.get('start_column_gap_info', 'C')  # Default to 'C' if not specified
+            
+            # Step 4: Prepare values for columns A and gap info columns
+            # Column A: caller gap
+            column_a_values = [[gap] for gap in filtered_gaps]
+            
+            # Gap info columns: caller_display (nick_name or caller_id), caller_id, date, time, customers_input_file
+            # We write 5 columns starting from start_column_gap_info
+            # Format caller_id as text to preserve leading zeros (e.g., 0522574817)
+            caller_id_text = f"'{caller_id}" if caller_id else caller_id
+            
+            gap_info_values = []
+            for gap in filtered_gaps:
+                gap_info_values.append([
+                    caller_display,         # First column: nick_name or caller_id
+                    caller_id_text,        # Second column: caller_id (formatted as text to preserve leading zeros)
+                    date,                   # Third column: date
+                    time,                   # Fourth column: time
+                    customers_input_file    # Fifth column: customers_input_file
+                ])
+            
+            # Calculate end column for gap info (5 columns total)
+            start_col_letter = start_column_gap_info.upper()
+            end_col_letter = self._get_column_letter_offset(start_col_letter, 4)  # 4 columns after start (start + 4 = 5 columns total)
+            
+            # Step 5: Write all rows starting from start_row (which may be adjusted if space_row was inserted)
+            # Write column A and gap info columns separately
+            end_row = start_row + len(filtered_gaps) - 1
+            
+            # Prepare batch update with two ranges: A and gap info columns
+            data = [
+                {
+                    'range': f"'{sheet_name}'!A{start_row}:A{end_row}",
+                    'values': column_a_values
+                },
+                {
+                    'range': f"'{sheet_name}'!{start_col_letter}{start_row}:{end_col_letter}{end_row}",
+                    'values': gap_info_values
+                }
             ]
             
-            # Add caller_gap items starting from A6
-            # Track which rows need red coloring (row indices, 0-based)
-            red_rows = []
-            row_index = 5  # Start from A6 (0-based index 5)
-            
-            for item in callers_gap:
-                item_str = str(item).strip()
-                values.append([item_str])
-                
-                # Check if this item is in allowed_gaps (should be colored red)
-                if item_str in allowed_gaps:
-                    red_rows.append(row_index)
-                
-                row_index += 1
-            
-            # Write all values at once
-            range_name = f"'{sheet_name}'!A1:A{len(values)}"
             body = {
-                'values': values
+                'valueInputOption': 'USER_ENTERED',
+                'data': data
             }
             
-            print(f"📝 Writing {len(values)} rows to gaps sheet (4 headers + 1 empty + {len(callers_gap)} data rows)", file=sys.stderr)
+            print(f"{log_prefix}📝 Writing {len(filtered_gaps)} rows to gaps sheet starting from row {start_row} (column A and columns {start_col_letter}-{end_col_letter})", file=sys.stderr)
             
-            self.drive_service.sheets_service.spreadsheets().values().update(
+            self.drive_service.sheets_service.spreadsheets().values().batchUpdate(
                 spreadsheetId=wb_id,
-                range=range_name,
-                valueInputOption='USER_ENTERED',
                 body=body
             ).execute()
             
-            print(f"✅ Data inserted successfully into gaps sheet", file=sys.stderr)
-            
-            # Step 3: Apply red background color to cells that are in allowed_gaps
-            if red_rows:
-                print(f"🎨 Applying red color to {len(red_rows)} cells that are in allowed gaps", file=sys.stderr)
-                self._apply_red_formatting(wb_id, sheet_name, red_rows)
+            print(f"{log_prefix}✅ Data inserted successfully into gaps sheet", file=sys.stderr)
             
         except Exception as e:
-            print(f"⚠️  Error inserting data to gaps sheet: {e}", file=sys.stderr)
+            print(f"⚠️  Error inserting data to gaps sheet (wb_id: {wb_id}, sheet_id: {sheet_id}): {e}", file=sys.stderr)
             raise
     
-    def _apply_red_formatting(self, spreadsheet_id: str, sheet_name: str, row_indices: list):
+    def _get_column_letter_offset(self, start_column: str, offset: int) -> str:
+        """
+        Get column letter offset from start column.
+        
+        Args:
+            start_column: Starting column letter (e.g., 'A', 'C', 'Z')
+            offset: Number of columns to offset (e.g., 3 means start + 3 columns)
+            
+        Returns:
+            Column letter after offset (e.g., 'C' + 3 = 'F')
+        """
+        # Convert column letter to number (A=1, B=2, ..., Z=26, AA=27, etc.)
+        def column_to_number(col: str) -> int:
+            result = 0
+            for char in col.upper():
+                result = result * 26 + (ord(char) - ord('A') + 1)
+            return result
+        
+        # Convert number to column letter
+        def number_to_column(num: int) -> str:
+            result = ""
+            while num > 0:
+                num -= 1
+                result = chr(ord('A') + (num % 26)) + result
+                num //= 26
+            return result
+        
+        start_num = column_to_number(start_column)
+        end_num = start_num + offset
+        return number_to_column(end_num)
+    
+    def _find_first_empty_row(self, wb_id: str, sheet_id: int, sheet_name: str) -> int:
+        """
+        Find the first empty row in column A of the sheet.
+        
+        Args:
+            wb_id: Google Sheets workbook ID
+            sheet_id: Sheet ID (integer)
+            sheet_name: Sheet name (string)
+            
+        Returns:
+            Row number (1-based) of the first empty row in column A
+        """
+        try:
+            # Read column A to find the first empty row
+            # Start from row 1 and read a reasonable chunk (e.g., first 1000 rows)
+            range_name = f"'{sheet_name}'!A1:A1000"
+            
+            result = self.drive_service.sheets_service.spreadsheets().values().get(
+                spreadsheetId=wb_id,
+                range=range_name
+            ).execute()
+            
+            values = result.get('values', [])
+            
+            # Find the first empty row (1-based index)
+            for i, row in enumerate(values, start=1):
+                # Check if row is empty or if column A is empty/None
+                if not row or (len(row) > 0 and (row[0] is None or str(row[0]).strip() == '')):
+                    return i
+            
+            # If no empty row found in first 1000 rows, return 1001
+            return len(values) + 1
+            
+        except Exception as e:
+            print(f"⚠️  Error finding first empty row: {e}, defaulting to row 1", file=sys.stderr)
+            # Default to row 1 if there's an error
+            return 1
+    
+    def _apply_red_formatting(self, spreadsheet_id: str, sheet_id: int, row_indices: list):
         """
         Apply red background color to specified rows in column A.
         
         Args:
             spreadsheet_id: Google Sheets spreadsheet ID
-            sheet_name: Name of the sheet
+            sheet_id: Sheet ID (integer)
             row_indices: List of row indices (0-based) to format
         """
         try:
-            sheet_id = self._get_sheet_id(spreadsheet_id, sheet_name)
-            
             # Create format requests for each row
             requests = []
             for row_index in row_indices:
-                # Convert 0-based index to 1-based row number
-                row_number = row_index + 1
-                
                 requests.append({
                     'repeatCell': {
                         'range': {
@@ -405,83 +567,45 @@ class FilterFile(BaseProcess):
         except Exception as e:
             print(f"⚠️  Error applying red formatting: {e}", file=sys.stderr)
             # Don't raise - formatting is not critical
-    
-    def _get_sheet_id(self, spreadsheet_id: str, sheet_name: str) -> int:
-        """
-        Get the sheet ID for a given sheet name.
-        
-        Args:
-            spreadsheet_id: Google Sheets spreadsheet ID
-            sheet_name: Name of the sheet
-            
-        Returns:
-            Sheet ID (integer)
-            
-        Raises:
-            ValueError: If sheet not found
-        """
-        try:
-            spreadsheet = self.drive_service.sheets_service.spreadsheets().get(
-                spreadsheetId=spreadsheet_id
-            ).execute()
-            
-            for sheet in spreadsheet.get('sheets', []):
-                if sheet['properties']['title'] == sheet_name:
-                    return sheet['properties']['sheetId']
-            
-            raise ValueError(f"Sheet '{sheet_name}' not found in spreadsheet {spreadsheet_id}")
-        except Exception as e:
-            print(f"⚠️  Error getting sheet ID: {e}", file=sys.stderr)
-            raise
 
-    def _get_customers(self, customers_input_file):
+    def _get_customers(self, customers_input_file: Optional[Dict[str, Any]] = None):
         """
         Read column A from row 2 onwards from input Excel file or Google Sheets and return as a list.
         
         Args:
-            customers_input_file: Path to input Excel file, file object, or None to get from Google Drive
+            customers_input_file: Either:
+                - None: use latest customers file from Google Drive
+                - Dict with keys:
+                    - file_path: local path to an uploaded Excel file
+                    - file_name: optional original file name (for display/logging)
             
         Returns:
             List of values from column A starting from row 2
         """
         if customers_input_file is None:
-            customers_input_file_id, customers_input_file_name = self.get_last_customers_file()
+            customers_input_file_id, customers_input_file_name, first_sheet_id = self.get_last_customers_file()
             customers_input_file = customers_input_file_name
-            customers = self._get_customers_from_google_drive(customers_input_file_id)
+            customers = self._get_customers_from_google_drive(customers_input_file_id, first_sheet_id)
             return customers, customers_input_file
-        
-        # Check if it's a Google Sheets file ID (typically a long alphanumeric string)
-        # Google Drive file IDs are usually 25-44 characters long
-        if isinstance(customers_input_file, str) and len(customers_input_file) > 20 and not os.path.exists(customers_input_file):
-            # Might be a Google Sheets file ID, try reading from Google Sheets API
-            print(f"Detected potential Google Sheets file ID, reading from Google Sheets API...", file=sys.stderr)
-            try:
-                customers = self._get_customers_from_google_sheets_id(customers_input_file)
-                return customers, customers_input_file
-            except Exception as e:
-                print(f"Failed to read as Google Sheets ID, trying as file path: {e}", file=sys.stderr)
-                # Fall through to try as file path
-        
-        # Try reading as Excel file
-        customers = self._get_customers_from_excel_file(customers_input_file)
-        # If it's a full path, extract the file name
-        if isinstance(customers_input_file, str):
-            file_name = os.path.basename(customers_input_file)
-            # Extract only the part that matches the auto dialer file name pattern
-            import re
-            if self.auto_dialer_file_name_pattern:
-                # Extract the prefix from the pattern (everything before the first placeholder)
-                # For example: "DIALER_{date}_{time}" -> "DIALER_"
-                pattern_prefix = self.auto_dialer_file_name_pattern.split('{')[0]
-                # Find where the pattern prefix starts in the file name
-                prefix_index = file_name.upper().find(pattern_prefix.upper())
 
-                if prefix_index != -1:
-                    # Extract everything from the prefix to the end of the filename
-                    file_name = file_name[prefix_index:]
-            
-            customers_input_file = file_name
-        return customers, customers_input_file
+        if "file_path" not in customers_input_file or customers_input_file.get('file_path') is None:
+            raise ValueError("customers_input_file['file_path'] is required when customers_input_file is provided")
+
+        if "file_name" not in customers_input_file or customers_input_file.get('file_name') is None:
+            raise ValueError("customers_input_file['file_name'] is required when customers_input_file is provided")
+    
+
+        customers_input_file_path = customers_input_file.get('file_path')
+        customers_input_file_name = customers_input_file.get('file_name')
+
+        # sys.path is a list (import paths) — use filesystem check instead
+        if not os.path.exists(str(customers_input_file_path)):
+            raise ValueError(f"File not found: {customers_input_file_path}")
+
+        # Try reading as Excel file
+        customers = self._get_customers_from_excel_file(customers_input_file_path)
+        
+        return customers, customers_input_file_name
 
     def _get_customers_from_excel_file(self, customers_input_file):
         """
@@ -540,7 +664,7 @@ class FilterFile(BaseProcess):
         input_wb.close()
         return customers
 
-    def _get_customers_from_google_sheets_id(self, file_id: str):
+    def _get_customers_from_google_sheets_id(self, file_id: str, sheet_id: int):
         """
         Get customers from Google Sheets using file ID.
         
@@ -555,18 +679,18 @@ class FilterFile(BaseProcess):
         return self._read_column_from_google_sheet(
             spreadsheet_id=file_id,
             range_name=main_col_range,
-            sheet_name=None,  # Use default sheet
+            sheet_id=sheet_id,
             skip_header_rows=1,  # Skip header row
             extract_column_index=0,  # Extract column A (first column)
         )
     
-    def _get_customers_from_google_drive(self, customers_input_file_id):
+    def _get_customers_from_google_drive(self, customers_input_file_id, sheet_id: int = None):
         """
         Get customers from Google Drive using file ID.
         
         Args:
             customers_input_file_id: Google Sheets file ID
-            
+
         Returns:
             List of values from column A starting from row 2
         """
@@ -580,7 +704,7 @@ class FilterFile(BaseProcess):
         return self._read_column_from_google_sheet(
             spreadsheet_id=customers_input_file_id,
             range_name=main_col_range,
-            sheet_name=None,  # Use default sheet
+            sheet_id=sheet_id,
             skip_header_rows=1,  # Skip header row
             extract_column_index=0,  # Extract column A (first column)
         )
@@ -604,14 +728,18 @@ class FilterFile(BaseProcess):
         print(f"Customers Google folder ID: {self.customers_google_folder_id}, Customers file name pattern: {self.customers_file_name_pattern}", file=sys.stderr)
         
         # Get the latest file matching the pattern from Google Drive
-        latest_file_id, latest_file_name = self.drive_service.get_latest_file_by_pattern(
+        result = self.drive_service.get_latest_file_by_pattern(
             folder_id=self.customers_google_folder_id,
             file_name_pattern=self.customers_file_name_pattern
         )
         
-        return latest_file_id, latest_file_name
+        if result is None:
+            return None, None
+        
+        latest_file_id, latest_file_name, first_sheet_id = result
+        return latest_file_id, latest_file_name, first_sheet_id
 
-    def get_list_of_missing_customers(self, spread_sheet_id: str):
+    def get_list_of_missing_customers(self, spread_sheet_id: str, sheet_id: int):
         """
         Get list of missing customers from the filter workbook.
         
@@ -630,7 +758,7 @@ class FilterFile(BaseProcess):
             return self._read_column_from_google_sheet(
                 spreadsheet_id=spread_sheet_id,
                 range_name=main_col_range,
-                sheet_name=None,  # Range already includes sheet name if needed
+                sheet_id=sheet_id,
                 skip_header_rows=0,
                 extract_column_index=None,  # Get all columns
             )
@@ -652,8 +780,6 @@ def create_filter_google_manager(config_manager: ConfigManager):
 
     output_files_config = config.get_output_files_config('filter')
 
-    gaps_sheet_config = output_files_config.get('gaps_sheet', {})
-
     allowed_gaps_sheet_config = config.get_input_files_config('filter').get('allowed_gaps_sheet', {})
 
 
@@ -665,4 +791,4 @@ def create_filter_google_manager(config_manager: ConfigManager):
 
     print(f"Customers Google folder ID: {customers_google_folder_id}, Customers file name pattern: {customers_file_name_pattern} auto dialer file name pattern: {auto_dialer_file_name_pattern}", file=sys.stderr)
 
-    return FilterFile(drive_service, config_manager, customers_google_folder_id, customers_file_name_pattern, auto_dialer_file_name_pattern, gaps_sheet_config, allowed_gaps_sheet_config)
+    return FilterFile(drive_service, config_manager, customers_google_folder_id, customers_file_name_pattern, auto_dialer_file_name_pattern, output_files_config, allowed_gaps_sheet_config)
