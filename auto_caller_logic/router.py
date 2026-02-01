@@ -16,6 +16,7 @@ from typing import Optional
 from .config import _get_default_config
 from .filter_file import create_filter_google_manager
 from .customers_file import create_customers_google_manager
+from .gaps_actions_file import create_gaps_actions_google_manager
 from .paycall_utils import get_paycall_data
 from common_utils.item_endpoints import (
     AddItemRequest, AddItemResponse,
@@ -49,6 +50,7 @@ class CreateFilterResponse(BaseModel):
     error_type: Optional[str] = None
     excel_buffer: Optional[str] = None
     file_name: Optional[str] = None
+    summarize_data: Optional[Dict[str, Any]] = None
 
 
 class ImportCustomersResponse(BaseModel):
@@ -84,6 +86,26 @@ class ModifySettingsResponse(BaseModel):
     config_settings: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
     error_type: Optional[str] = None
+
+
+class EnterGapsRequest(BaseModel):
+    """Request model for entering callers into gaps sheets."""
+    callers_gap: List[str]  # List of caller gap values to insert
+    customers_file_name: str  # Customers input file name
+    nick_name: str = None # Nick name
+    caller_id: str  # Caller ID
+    date_str: str  # Format: "dd-mm-YYYY HH:MM:SS"
+    time_str: str    # Format: "dd-mm-YYYY HH:MM:SS"
+
+
+class EnterGapsResponse(BaseModel):
+    """Response model for entering callers into gaps sheets."""
+    success: bool
+    global_gap_sheet_config: Optional[Dict[str, Any]] = None
+    error: Optional[str] = None
+    error_type: Optional[str] = None
+
+
 # Item and List models imported from common_utils.item_endpoints
 
 
@@ -234,8 +256,6 @@ async def create_filter(request: CreateFilterRequest):
 
         nick_name = _get_caller_nick_name(request.caller_id)
 
-
-
         # Create filter
         config_manager = _get_config()
         filter_google_manager = create_filter_google_manager(config_manager)
@@ -271,14 +291,19 @@ async def create_filter(request: CreateFilterRequest):
 
         global_gap_sheet_config = post_data['global_gap_sheet_config']
 
+        summarize_data = filter_google_manager.get_generated_data()
+
         print(f"Missing customers: {missing_customers}", file=sys.stderr)
+
+        print(f"Summarize data: {summarize_data}", file=sys.stderr)
 
         return CreateFilterResponse(
             success=True,
             data=missing_customers,
             google_sheet_gaps_config=global_gap_sheet_config,
             excel_buffer=excel_base64,
-            file_name=file_name
+            file_name=file_name,
+            summarize_data=summarize_data
         )
 
     except Exception as e:
@@ -296,6 +321,50 @@ async def create_filter(request: CreateFilterRequest):
                 os.unlink(temp_file_path)
             except Exception:
                 pass
+
+
+@router.post("/enter-gaps", response_model=EnterGapsResponse)
+async def enter_gaps(request: EnterGapsRequest):
+    """
+    Enter callers into gaps sheets from POST request.
+    """
+    try:
+        config_manager = _get_config()
+        gaps_actions_manager = create_gaps_actions_google_manager(config_manager)
+        
+        # Run the process with callers_gap and metadata
+        process_result = gaps_actions_manager.run(
+            callers_gap=request.callers_gap,
+            caller_id=request.caller_id,
+            time_str=request.time_str,
+            date_str=request.date_str,
+            nick_name=request.nick_name,
+            customers_input_file_name=request.customers_file_name
+        )
+        
+        # Get post-process data
+        post_data = gaps_actions_manager.get_post_data()
+        
+        if post_data is None:
+            raise ValueError("Post-process data is not available")
+        
+        global_gap_sheet_config = post_data.get('global_gap_sheet_config')
+        
+        print(f"Entered gaps: {len(request.callers_gap)} callers", file=sys.stderr)
+        
+        return EnterGapsResponse(
+            success=True,
+            global_gap_sheet_config=global_gap_sheet_config
+        )
+        
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        print(f"Error type: {type(e).__name__}", file=sys.stderr)
+        return EnterGapsResponse(
+            success=False,
+            error=str(e),
+            error_type=type(e).__name__
+        )
 
 
 @router.get("/import-customers", response_model=ImportCustomersResponse)
@@ -406,7 +475,7 @@ async def get_settings(settings_config: str = Query(..., description="JSON dicti
             else:
                 gaps_sheet_config_names = [s.strip() for s in gaps_sheet_config_str.split(',')]
 
-            gaps_sheet_config_res = config.get_output_files_config_used_display_by_name("filter", gaps_sheet_config_names)
+            gaps_sheet_config_res = config.get_output_files_config_used_display_by_name("gaps_actions", gaps_sheet_config_names)
             config_response["gaps_sheet_config"] = gaps_sheet_config_res
 
         if "main_google_folder_id" in settings_config_dict:
@@ -473,7 +542,7 @@ async def modify_settings(request: ModifySettingsRequest):
         if 'gaps_sheet_config' in request_dict:
             gaps_sheet_config = request_dict['gaps_sheet_config']
             if gaps_sheet_config:
-                config.update_output_files("filter", gaps_sheet_config)
+                config.update_output_files("gaps_actions", gaps_sheet_config)
                 updated_items.append('gaps_sheet_config')
                 config_response['gaps_sheet_config'] = gaps_sheet_config
         

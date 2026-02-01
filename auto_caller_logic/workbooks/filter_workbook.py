@@ -70,8 +70,11 @@ class FilterWorkbook(ExcelToGoogleWorkbook):
             ws_summary.sheet_view.rightToLeft = True
 
             # Use summarize_data passed from generate_data
-
-            date_str, time_str, customers_input_file_val, caller_id_val, nick_name_val = summarize_data
+            date_str = summarize_data.get('date_str', '')
+            time_str = summarize_data.get('time_str', '')
+            customers_input_file_val = summarize_data.get('customers_input_file_name', '')
+            caller_id_val = summarize_data.get('caller_id', '')
+            nick_name_val = summarize_data.get('nick_name', '')
 
             ws_summary['A1'] = date_str
             ws_summary['A2'] = time_str

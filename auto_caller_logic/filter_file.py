@@ -50,7 +50,13 @@ class FilterFile(BaseProcess):
             current_datetime = datetime.now()
             date_str = current_datetime.strftime("%d.%m.%Y")
             time_str = current_datetime.strftime("%H.%M")
-            summarize_data = [date_str, time_str, customers_input_file, caller_id, nick_name]
+            summarize_data = {
+                'date_str': date_str,
+                'time_str': time_str,
+                'customers_input_file_name': customers_input_file,
+                'caller_id': caller_id,
+                'nick_name': nick_name
+            }
             
             # Store for later use in gaps sheet insertion
             self._summarize_data = summarize_data
@@ -86,28 +92,27 @@ class FilterFile(BaseProcess):
 
         print (f"finished .... post process implementation. len of callers gap: {len(callers_gap)}", file=sys.stderr)
         
+        allowed_gaps = self._get_allowed_gaps_list()
+
+        filtered_callers_gap = [
+            item for item in callers_gap 
+            if str(item).strip() not in allowed_gaps
+        ]
 
         # Insert data into gaps sheet
         if self.gaps_sheet_config and callers_gap:
             # Get allowed gaps list for coloring
-            allowed_gaps = self._get_allowed_gaps_list()
 
             print(f"Allowed gaps: {[item for item in allowed_gaps]}", file=sys.stderr)
-            self._insert_data_to_gaps_sheet(callers_gap, allowed_gaps)
+            self._insert_data_to_gaps_sheet(filtered_callers_gap)
             
-            # Filter callers_gap to only include items that are in allowed_gaps
-            filtered_callers_gap = [
-                item for item in callers_gap 
-                if str(item).strip() not in allowed_gaps
-            ]
-            print(f"🔍 Filtered callers_gap: {len(callers_gap)} -> {len(filtered_callers_gap)} items (only those in allowed_gaps)", file=sys.stderr)
-            
-            # Use filtered list in return value
-            callers_gap = filtered_callers_gap
         else:
             print(f"No callers gap to insert", file=sys.stderr)
 
-        return {'callers_gap': callers_gap, 'global_gap_sheet_config': self.gaps_sheet_config}
+        return {'callers_gap': filtered_callers_gap, 'global_gap_sheet_config': self.gaps_sheet_config}
+
+    def get_generated_data(self) -> Dict[str, Any]:
+        return self._summarize_data
     
     def _get_sheet_name_from_id(self, spreadsheet_id: str, sheet_id: int) -> str:
         """
@@ -281,7 +286,7 @@ class FilterFile(BaseProcess):
                 filtered.append(v_str)
         return filtered
     
-    def _insert_data_to_gaps_sheet(self, callers_gap: list, allowed_gaps: set):
+    def _insert_data_to_gaps_sheet(self, callers_gap: list):
         """
         Insert data into all gaps Google Sheets configured in gaps_sheet_config.
         Filters callers_gap to exclude items in allowed_gaps, then iterates over each 
@@ -294,20 +299,6 @@ class FilterFile(BaseProcess):
         if not self.gaps_sheet_config:
             print("⚠️  Gaps sheet config is not set, skipping insertion", file=sys.stderr)
             return
-        
-        # Filter callers_gap to exclude items in allowed_gaps
-        filtered_gaps = [
-            str(item).strip() for item in callers_gap 
-            if str(item).strip() not in allowed_gaps
-        ]
-        
-        if not filtered_gaps:
-            print(f"⚠️  No gaps to insert (all {len(callers_gap)} were filtered out by allowed_gaps)", file=sys.stderr)
-            return
-        
-        print(f"📝 Filtered {len(callers_gap)} gaps to {len(filtered_gaps)} gaps (excluded {len(callers_gap) - len(filtered_gaps)} in allowed_gaps)", file=sys.stderr)
-
-        
         
         # Iterate over each sub-item in gaps_sheet_config (e.g., 'gaps_sheet', 'gaps_sheet_runs')
         for sheet_name_key, sheet_config in self.gaps_sheet_config.items():
@@ -324,7 +315,7 @@ class FilterFile(BaseProcess):
             
             print(f"📝 Processing gaps sheet: {sheet_name_key} (wb_id: {wb_id}, sheet_id: {sheet_id})", file=sys.stderr)
             try:
-                self._insert_data_to_single_gaps_sheet(sheet_config, filtered_gaps, sheet_name_key)
+                self._insert_data_to_single_gaps_sheet(sheet_config, callers_gap, sheet_name_key)
             except Exception as e:
                 print(f"⚠️  Error inserting data to {sheet_name_key}: {e}", file=sys.stderr)
                 # Continue with other sheets even if one fails
@@ -379,12 +370,12 @@ class FilterFile(BaseProcess):
                 raise ValueError("summarize_data is not available. Make sure generate_data was called first.")
             
             summarize_data = self._summarize_data
-            # summarize_data format: [date, time, customers_input_file, caller_id, nick_name]
-            date = summarize_data[0]
-            time = summarize_data[1]
-            customers_input_file = summarize_data[2]
-            caller_id = summarize_data[3]
-            nick_name = summarize_data[4] if len(summarize_data) > 4 else None
+            # summarize_data format: dictionary with keys: date, time, customers_input_file, caller_id, nick_name
+            date = summarize_data.get('date_str', '')
+            time = summarize_data.get('time_str', '')
+            customers_input_file = summarize_data.get('customers_input_file_name', '')
+            caller_id = summarize_data.get('caller_id', '')
+            nick_name = summarize_data.get('nick_name')
             
             # Use nick_name if available, otherwise fall back to caller_id
             caller_display = nick_name if nick_name else caller_id

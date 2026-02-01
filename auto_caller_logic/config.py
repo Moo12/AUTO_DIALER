@@ -110,8 +110,6 @@ class Config:
             raise ValueError(f"Invalid file name: {name}. Available: {list(files_config.keys())}")
         
         excel_workbooks = files_config.get(name, {}).get('excel_workbooks', {})
-        if not excel_workbooks:
-            raise ValueError(f"No excel_workbooks found for file name: {name}")
         
         return excel_workbooks
 
