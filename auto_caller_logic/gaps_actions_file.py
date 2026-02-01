@@ -63,7 +63,13 @@ class GapsActionsFile(BaseProcess):
 
         # Insert data into gaps sheet
         if self.gaps_sheet_config and callers_gap:
-            self._insert_data_to_gaps_sheet(callers_gap)
+            try:
+                self._insert_data_to_gaps_sheet(callers_gap)
+                print(f"✅ Successfully inserted {len(callers_gap)} gaps into sheets", file=sys.stderr)
+            except Exception as e:
+                error_msg = f"Failed to insert gaps into sheets: {str(e)}"
+                print(f"❌ {error_msg}", file=sys.stderr)
+                raise RuntimeError(error_msg) from e
         else:
             print(f"No callers gap to insert", file=sys.stderr)
 
@@ -103,40 +109,58 @@ class GapsActionsFile(BaseProcess):
         
         Args:
             callers_gap: List of caller gap values to insert
+            
+        Raises:
+            RuntimeError: If any sheet insertion fails
         """
         if not self.gaps_sheet_config:
-            print("⚠️  Gaps sheet config is not set, skipping insertion", file=sys.stderr)
-            return
+            raise RuntimeError("Gaps sheet config is not set")
         
         if not callers_gap:
-            print(f"⚠️  No gaps to insert", file=sys.stderr)
-            return
+            raise RuntimeError("No gaps to insert")
         
         # Normalize callers_gap values
         normalized_gaps = [str(item).strip() for item in callers_gap]
         
         print(f"📝 Inserting {len(normalized_gaps)} gaps into sheets", file=sys.stderr)
 
+        errors = []
+        sheets_processed = 0
+
         # Iterate over each sub-item in gaps_sheet_config (e.g., 'gaps_sheet_archive', 'gaps_runs')
         for sheet_name_key, sheet_config in self.gaps_sheet_config.items():
             if not isinstance(sheet_config, dict):
-                print(f"⚠️  Skipping {sheet_name_key}: config is not a dictionary", file=sys.stderr)
+                error_msg = f"{sheet_name_key}: config is not a dictionary"
+                print(f"⚠️  Skipping {error_msg}", file=sys.stderr)
+                errors.append(error_msg)
                 continue
             
             wb_id = sheet_config.get('wb_id')
             sheet_id = sheet_config.get('sheet_id')
             
             if not wb_id or sheet_id is None:
-                print(f"⚠️  Skipping {sheet_name_key}: missing wb_id or sheet_id: {sheet_config}", file=sys.stderr)
+                error_msg = f"{sheet_name_key}: missing wb_id or sheet_id: {sheet_config}"
+                print(f"⚠️  Skipping {error_msg}", file=sys.stderr)
+                errors.append(error_msg)
                 continue
             
             print(f"📝 Processing gaps sheet: {sheet_name_key} (wb_id: {wb_id}, sheet_id: {sheet_id})", file=sys.stderr)
             try:
                 self._insert_data_to_single_gaps_sheet(sheet_config, normalized_gaps, sheet_name_key)
+                sheets_processed += 1
+                print(f"✅ Successfully inserted data into {sheet_name_key}", file=sys.stderr)
             except Exception as e:
-                print(f"⚠️  Error inserting data to {sheet_name_key}: {e}", file=sys.stderr)
-                # Continue with other sheets even if one fails
-                continue
+                error_msg = f"{sheet_name_key}: {str(e)}"
+                print(f"❌ Error inserting data to {error_msg}", file=sys.stderr)
+                errors.append(error_msg)
+        
+        # Raise error if any failures occurred
+        if errors:
+            error_summary = f"Failed to insert gaps into {len(errors)} sheet(s). Errors: {'; '.join(errors)}"
+            raise RuntimeError(error_summary)
+        
+        if sheets_processed == 0:
+            raise RuntimeError("No sheets were processed successfully")
     
     def _insert_data_to_single_gaps_sheet(self, sheet_config: Dict[str, Any], callers_gap: list, sheet_name_key: str = None):
         """
