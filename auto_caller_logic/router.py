@@ -18,6 +18,7 @@ from .filter_file import create_filter_google_manager
 from .customers_file import create_customers_google_manager
 from .gaps_actions_file import create_gaps_actions_google_manager
 from .paycall_utils import get_paycall_data
+from common_utils.gmail_service import GmailService
 from common_utils.item_endpoints import (
     AddItemRequest, AddItemResponse,
     UpdateItemRequest, UpdateItemResponse,
@@ -45,7 +46,7 @@ class CreateFilterRequest(BaseModel):
 class CreateFilterResponse(BaseModel):
     success: bool
     data: Optional[List[str]] = None
-    google_sheet_gaps_config: Optional[Dict[str, Any]] = None
+    google_spreadsheet_links: Optional[List[Dict[str, Any]]] = None
     error: Optional[str] = None
     error_type: Optional[str] = None
     excel_buffer: Optional[str] = None
@@ -289,7 +290,9 @@ async def create_filter(request: CreateFilterRequest):
 
         missing_customers = post_data['callers_gap']
 
-        global_gap_sheet_config = post_data['global_gap_sheet_config']
+        globals_links = filter_google_manager.get_global_gap_sheet_config()
+
+        print(f"Globals links: {globals_links}", file=sys.stderr)
 
         summarize_data = filter_google_manager.get_generated_data()
 
@@ -300,7 +303,7 @@ async def create_filter(request: CreateFilterRequest):
         return CreateFilterResponse(
             success=True,
             data=missing_customers,
-            google_sheet_gaps_config=global_gap_sheet_config,
+            google_spreadsheet_links=globals_links,
             excel_buffer=excel_base64,
             file_name=file_name,
             summarize_data=summarize_data

@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 import os
 import io
 from pathlib import Path
@@ -14,6 +14,8 @@ import sys
 from datetime import datetime
 from .config import _get_default_config
 from common_utils.config_manager import ConfigManager
+
+from .spreadsheet_updaters.base import BaseSpreadsheetUpdater
 
 # Google API scopes - need both Drive and Sheets
 SCOPES = [
@@ -247,9 +249,11 @@ class GDriveService:
 
 class BaseProcess(ABC):
     """Abstract base class for all file-creating processes."""
-    def __init__(self, drive_service, config_manager: ConfigManager, name: str = None):
+    def __init__(self, drive_service, config_manager: ConfigManager, name: str = None, spreadsheet_updaters: List[BaseSpreadsheetUpdater] = None):
 
         excel_workbooks_config = _get_default_config(config_manager).get_excel_workbooks_config_by_name(name)
+
+        self.spreadsheet_updaters = spreadsheet_updaters
 
         # Initialize dictionary to store ExcelToGoogleWorkbook instances
         # Key is the workbook name from excel_workbooks_config (e.g., 'intermidiate', 'outo_dialer', 'filter')
@@ -278,6 +282,13 @@ class BaseProcess(ABC):
         """The specific logic to create the file content."""
         pass
 
+    def get_global_gap_sheet_config(self) -> List[Dict[str, Any]]:
+        spreadsheet_config_links = []
+        for spreadsheet_updater in self.spreadsheet_updaters:
+            if isinstance(spreadsheet_updater, BaseSpreadsheetUpdater):
+                spreadsheet_config_links.append(spreadsheet_updater.get_display_name_to_link_dict())
+
+        return spreadsheet_config_links
     def get_generated_data(self) -> Dict[str, Any]:
         return self.generated_data
 
@@ -355,8 +366,8 @@ class BaseProcess(ABC):
                             formulas=excel_to_google_workbook._formulas
                         )
 
-                excel_info[workbook_name]['file_id'] = file_id
-                excel_info[workbook_name]['sheet_id'] = sheet_id
+                    excel_info[workbook_name]['file_id'] = file_id
+                    excel_info[workbook_name]['sheet_id'] = sheet_id
         
         # Post-process: get additional data needed for post-excel file creation
         # Note: post_process() is OPTIONAL - subclasses don't have to implement it.
@@ -370,6 +381,10 @@ class BaseProcess(ABC):
         # If no post-process data (None or not implemented), use empty dict
         # This allows post_excel_file_creation() to be called even if post_process wasn't implemented
         post_data = post_process_data if post_process_data is not None else {}
+
+        if self.spreadsheet_updaters:
+            for spreadsheet_updater in self.spreadsheet_updaters:
+                spreadsheet_updater.update_spreadsheets(**post_data)
 
         # Post-excel file creation: create additional files based on post-process data
         for workbook_name, excel_to_google_workbook in self.excel_to_google_workbook.items():
