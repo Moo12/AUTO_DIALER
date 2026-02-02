@@ -18,7 +18,6 @@ from .filter_file import create_filter_google_manager
 from .customers_file import create_customers_google_manager
 from .gaps_actions_file import create_gaps_actions_google_manager
 from .paycall_utils import get_paycall_data
-from common_utils.gmail_service import GmailService
 from common_utils.item_endpoints import (
     AddItemRequest, AddItemResponse,
     UpdateItemRequest, UpdateItemResponse,
