@@ -478,8 +478,10 @@ async def get_settings(settings_config: str = Query(..., description="JSON dicti
             else:
                 gaps_sheet_config_names = [s.strip() for s in gaps_sheet_config_str.split(',')]
 
-            gaps_sheet_config_res = config.get_output_files_config_used_display_by_name("gaps_actions", gaps_sheet_config_names)
-            config_response["gaps_sheet_config"] = gaps_sheet_config_res
+            gaps_sheet_config_filter_names = config.get_output_files_config("filter")
+            
+            gaps_sheet_config_gaps_actions_names = config.get_output_files_config("gaps_actions")
+            config_response["gaps_sheet_config"] = gaps_sheet_config_filter_names | gaps_sheet_config_gaps_actions_names
 
         if "main_google_folder_id" in settings_config_dict:
             main_google_folder_id = config.get_main_google_folder_id()
@@ -545,7 +547,11 @@ async def modify_settings(request: ModifySettingsRequest):
         if 'gaps_sheet_config' in request_dict:
             gaps_sheet_config = request_dict['gaps_sheet_config']
             if gaps_sheet_config:
-                config.update_output_files("gaps_actions", gaps_sheet_config)
+                if "gaps_sheet_archive" in gaps_sheet_config:
+                    config.update_output_files("filter", { "gaps_sheet_archive": gaps_sheet_config["gaps_sheet_archive"] })
+                if "gaps_sheet_runs" in gaps_sheet_config:
+                    config.update_output_files("gaps_actions", { "gaps_sheet_runs": gaps_sheet_config["gaps_sheet_runs"] })
+                
                 updated_items.append('gaps_sheet_config')
                 config_response['gaps_sheet_config'] = gaps_sheet_config
         
