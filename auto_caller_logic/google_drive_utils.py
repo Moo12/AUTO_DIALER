@@ -2,12 +2,12 @@ from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional, List
 import os
 import io
+import re
 from pathlib import Path
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
-from googleapiclient.http import MediaFileUpload
 from googleapiclient.http import MediaIoBaseUpload
 import pickle
 import sys
@@ -249,7 +249,7 @@ class GDriveService:
 
 class BaseProcess(ABC):
     """Abstract base class for all file-creating processes."""
-    def __init__(self, drive_service, config_manager: ConfigManager, name: str = None, spreadsheet_updaters: List[BaseSpreadsheetUpdater] = None):
+    def __init__(self, drive_service, config_manager: ConfigManager, name: str = None, spreadsheet_updaters: List[BaseSpreadsheetUpdater] = None, mail_service = None):
 
         excel_workbooks_config = _get_default_config(config_manager).get_excel_workbooks_config_by_name(name)
 
@@ -277,6 +277,10 @@ class BaseProcess(ABC):
 
         self.post_data = {}
         
+        # Store mail service (passed as argument)
+        self.mail_service = mail_service
+        
+    
     @abstractmethod
     def generate_data(self, **kwargs):
         """The specific logic to create the file content."""
@@ -289,6 +293,19 @@ class BaseProcess(ABC):
                 spreadsheet_config_links.append(spreadsheet_updater.get_display_name_to_link_dict())
 
         return spreadsheet_config_links
+
+    def get_mail_data(self) -> Dict[str, Any]:
+        """
+        Get mail data for placeholder replacement.
+        Derived classes should override this method to return a dictionary
+        with keys matching the placeholders in mail config (title, recipients, subtitle).
+        
+        Returns:
+            Dictionary with keys matching placeholders in mail config
+            Example: {'date': '01.02.2026', 'caller_id': '0547151771', ...}
+        """
+        return {}
+
     def get_generated_data(self) -> Dict[str, Any]:
         return self.generated_data
 
@@ -331,7 +348,6 @@ class BaseProcess(ABC):
         file_ids = []
 
         excel_info = {}
-
 
         for workbook_name, excel_to_google_workbook in self.excel_to_google_workbook.items():
 
@@ -424,6 +440,16 @@ class BaseProcess(ABC):
                 print(f"⚠️  Warning: post_excel_file_creation failed for {workbook_name}: {e}", file=sys.stderr)
                 # Optionally, you might want to store the error in excel_info
                 excel_info[workbook_name]['post_excel_error'] = str(e)
+        
+        # Send email if mail service is configured
+        if self.mail_service:
+            try:
+                # Get mail data from derived class
+                mail_data = self.get_mail_data()
+                self.mail_service.send_mail(mail_data=mail_data)
+            except Exception as e:
+                # Log error but don't fail the entire process
+                print(f"⚠️  Warning: Failed to send email: {e}", file=sys.stderr)
 
         return excel_info
 

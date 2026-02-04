@@ -13,6 +13,14 @@ from common_utils.config_manager import ConfigManager
 
 
 class Config:
+    FILES_CONFIG_KEY = 'files'
+    MAIL_CONFIG_KEY = 'mail'
+    INPUT_CONFIG_KEY = 'input'
+    OUTPUT_CONFIG_KEY = 'output'
+    SERVICE_CONFIG_KEY = 'service'
+    GOOGLE_DRIVE_CONFIG_KEY = 'google_drive'
+    PAYCALL_CONFIG_KEY = 'paycall'
+    OUTPUT_CONFIG_KEY = 'output'
     """
     Configuration manager for dial file generator.
     
@@ -112,6 +120,46 @@ class Config:
         excel_workbooks = files_config.get(name, {}).get('excel_workbooks', {})
         
         return excel_workbooks
+
+    
+    def get_mail_config(self, mail_config: Optional[Union[str, list[str]]]) -> Dict[str, Any]:
+        """
+        Get mail configuration for a given mail config string.
+        
+        Args:
+            mail_config_str: Mail config string (e.g., 'customers,filter')
+        """
+
+        
+        if isinstance(mail_config, str):
+            mail_config_list = [s.strip() for s in mail_config.split(",")]
+        elif not isinstance(mail_config, list):
+            raise ValueError(f"mail_config must be a string or list of strings")
+        else:
+            mail_config_list = mail_config
+        
+        config = {}
+        for mail_module_name in mail_config_list:
+            config[mail_module_name] = self.get_mail_config_by_name(mail_module_name)
+        
+        return config
+
+    def get_mail_config_by_name(self, name: str) -> Optional[Dict[str, Any]]:
+        """
+        Get mail configuration for a given file name.
+        
+        Args:
+            name: File name (e.g., 'customers', 'filter')
+            
+        Returns:
+            Dictionary with mail configuration (title, recipients, subtitle) or None if not configured
+        """
+        files_config = self.get_config().get('files', {})
+        if name not in files_config:
+            return None
+        
+        mail_config = files_config.get(name, {}).get(self.MAIL_CONFIG_KEY, None)
+        return mail_config
 
     def get_output_excel_file_config_by_name(self, name_method: str, name_excel_workbook: str) -> Dict[str, str]:
         if name_method not in self._config_manager.load().get('files', {}):
@@ -364,6 +412,44 @@ class Config:
         
 
         self._config_manager.save_config(config)
+
+    def update_mail_config(self, mail_config: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+        """
+        Update mail configuration.
+        
+        Args:
+            mail_config: Dictionary with mail configuration
+        """
+        config = self._config_manager.get_config()
+
+        # Check that the mail_config dictionary key is one of the submodules inside 'files'
+        if not isinstance(mail_config, dict) or len(mail_config) != 1:
+            raise ValueError("mail_config must be a dictionary with a single key corresponding to a submodule in 'files'.")
+        
+        files_section = config.get('files', {})
+        for mail_module_name, mail_module_config in mail_config.items():
+            if mail_module_name not in files_section:
+                raise ValueError(f"'{mail_module_name}' is not a submodule inside 'files'. Valid submodules: {list(files_section.keys())}")
+            
+            # Get existing mail config and merge with new config (preserve existing values)
+            existing_mail_config = config['files'][mail_module_name].get(self.MAIL_CONFIG_KEY, {})
+            if not isinstance(existing_mail_config, dict):
+                existing_mail_config = {}
+            
+            # Merge: new values override, but keep existing values that aren't in new config
+            merged_config = existing_mail_config.copy()
+            merged_config.update(mail_module_config)
+            
+            config['files'][mail_module_name][self.MAIL_CONFIG_KEY] = merged_config
+        
+        self._config_manager.save_config(config)
+
+        # Return the merged configs
+        result = {}
+        for mail_module_name in mail_config.keys():
+            result[mail_module_name] = config['files'][mail_module_name].get(self.MAIL_CONFIG_KEY, {})
+        
+        return result
 
     def get_filter_input_sheets(self, sheets_names):
         """

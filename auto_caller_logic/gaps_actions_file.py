@@ -20,9 +20,11 @@ class GapsActionsFile(BaseProcess):
         self,
         drive_service,
         config_manager: ConfigManager,
-        spreadsheet_updaters: List[BaseSpreadsheetUpdater]
+        name: str,
+        spreadsheet_updaters: List[BaseSpreadsheetUpdater],
+        mail_service = None
     ):
-        super().__init__(drive_service, config_manager, "gaps_actions", spreadsheet_updaters=spreadsheet_updaters)
+        super().__init__(drive_service, config_manager, name, spreadsheet_updaters=spreadsheet_updaters, mail_service=mail_service)
         
         
         # Store metadata for gaps sheet insertion
@@ -68,6 +70,9 @@ def create_gaps_actions_google_manager(config_manager: ConfigManager):
     """Factory function to create GapsActionsFile instance."""
     from .gaps_actions_file import GapsActionsFile
     from .google_drive_utils import GDriveService
+    from .mail_service import create_mail_service
+
+    module_name = 'gaps_actions'
     config = _get_default_config(config_manager)
     print(f"Config created", file=sys.stderr)
     service_config = config.get_service_config()
@@ -75,7 +80,7 @@ def create_gaps_actions_google_manager(config_manager: ConfigManager):
 
     print(f"Drive service created", file=sys.stderr)
 
-    output_files_config = config.get_output_files_config('gaps_actions')
+    output_files_config = config.get_output_files_config(module_name)
 
     spreadsheet_updaters = []
 
@@ -85,5 +90,9 @@ def create_gaps_actions_google_manager(config_manager: ConfigManager):
 
     print(f"Gaps actions output files config: {output_files_config}", file=sys.stderr)
 
-    return GapsActionsFile(drive_service, config_manager, spreadsheet_updaters)
+    # Create mail service if mail config exists
+    mail_config = config.get_mail_config_by_name(module_name)
+    mail_service = create_mail_service(module_name, mail_config, service_config)
+
+    return GapsActionsFile(drive_service, config_manager, module_name, spreadsheet_updaters, mail_service)
 

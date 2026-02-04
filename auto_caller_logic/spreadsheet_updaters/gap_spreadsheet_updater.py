@@ -67,21 +67,37 @@ class GapSpreadsheetUpdater(BaseSpreadsheetUpdater):
         # Get sheet name from sheet_id for range construction
         sheet_name = self._get_sheet_name_from_id()
         
-        # Step 1: Find the first empty row
-        first_empty_row = self._find_first_empty_row(sheet_name)
-        print(f"📝 First empty row found at row {first_empty_row}", file=sys.stderr)
-        
-        # Step 2: Handle space_row option
-        if self.spreadsheet_config.get('space_row') is True and first_empty_row > 2:
-            start_row = first_empty_row + 1
-            print(f"📝 space_row is enabled, data will start from row {start_row} (skipping row {first_empty_row})", file=sys.stderr)
+        # New behavior: insert new data at row 2 (below header) and shift existing rows down.
+        insert_at_row = 2
+
+        # Step 1: Prepare data for insertion at row 2
+        batch_updates = self._prepare_batch_updates(sheet_name, insert_at_row, **kwargs)
+        if not batch_updates:
+            print("ℹ️  No data to insert", file=sys.stderr)
+            return
+
+        # Step 2: Insert required number of rows so we don't overwrite existing content
+        rows_to_insert = len(batch_updates[0].get('values', []))
+        if rows_to_insert <= 0:
+            print("ℹ️  No rows to insert", file=sys.stderr)
+            return
+
+        # If space_row is enabled, insert one extra blank row AFTER the inserted block
+        # (acts as a separator between the new data and the previous content).
+        space_row = self.spreadsheet_config.get('space_row') is True
+        total_rows_to_insert = rows_to_insert + (1 if space_row else 0)
+
+        self._insert_rows(insert_at_row, total_rows_to_insert)
+        if space_row:
+            print(
+                f"📝 space_row enabled: inserted {total_rows_to_insert} rows at row {insert_at_row} "
+                f"({rows_to_insert} data rows + 1 separator)",
+                file=sys.stderr
+            )
         else:
-            start_row = first_empty_row
-        
-        # Step 3: Prepare data - each derived class handles its own data processing
-        batch_updates = self._prepare_batch_updates(sheet_name, start_row, **kwargs)
-        
-        # Step 4: Execute batch update
+            print(f"📝 Inserted {total_rows_to_insert} rows at row {insert_at_row}", file=sys.stderr)
+
+        # Step 3: Execute batch update into the newly inserted rows (row 2..)
         self._execute_batch_update(batch_updates)
         
         print(f"✅ Data inserted successfully", file=sys.stderr)
@@ -140,7 +156,7 @@ class GapSpreadsheetUpdater(BaseSpreadsheetUpdater):
         nick_name = metadata.get('nick_name', '')
         
         # Use nick_name if available, otherwise fall back to caller_id
-        caller_display = nick_name if nick_name else caller_id
+        caller_display = nick_name
         
         # Get start column for gap info from config (default: 'C')
         start_column_gap_info = self.spreadsheet_config.get('start_column_gap_info', 'C')
@@ -155,6 +171,9 @@ class GapSpreadsheetUpdater(BaseSpreadsheetUpdater):
         # Format caller_id as text to preserve leading zeros (e.g., 0522574817)
         caller_id_text = f"'{caller_id}" if caller_id else caller_id
         
+        # Format time as text to preserve leading zeros (e.g., 09:05 instead of 9:5)
+        time_text = f"'{str(time)}" if time else ''
+        
         # Prepare gap info columns
         gap_info_values = []
         for gap in filtered_items:
@@ -162,7 +181,7 @@ class GapSpreadsheetUpdater(BaseSpreadsheetUpdater):
                 caller_display,         # First column: nick_name or caller_id
                 caller_id_text,        # Second column: caller_id (formatted as text)
                 date,                   # Third column: date
-                time,                   # Fourth column: time
+                time_text,              # Fourth column: time (formatted as text)
                 customers_input_file    # Fifth column: customers_input_file
             ])
         

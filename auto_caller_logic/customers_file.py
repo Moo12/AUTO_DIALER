@@ -5,9 +5,10 @@ import os
 import sys
 import io
 from common_utils.config_manager import ConfigManager
+from .mail_service import create_mail_service
 class CustomersFile(BaseProcess):
-    def __init__(self, drive_service, config_manager: ConfigManager, column_letter_1: str, column_letter_2: str, column_letter_2_filter: str, sheet_1_id: str, sheet_2_id: str, sheet_1_name: str, sheet_2_name: str):
-        super().__init__(drive_service, config_manager, "customers")
+    def __init__(self, drive_service, config_manager: ConfigManager, name: str, mail_service, column_letter_1: str, column_letter_2: str, column_letter_2_filter: str, sheet_1_id: str, sheet_2_id: str, sheet_1_name: str, sheet_2_name: str):
+        super().__init__(drive_service, config_manager, name, mail_service=mail_service)
 
         print(f"CustomersFile initialized with column_letter_1: {column_letter_1}, column_letter_2: {column_letter_2}, column_letter_2_filter: {column_letter_2_filter}, sheet_1_id: {sheet_1_id}, sheet_2_id: {sheet_2_id}, sheet_1_name: {sheet_1_name}, sheet_2_name: {sheet_2_name}", file=sys.stderr)
         self.column_letter_1 = column_letter_1
@@ -162,6 +163,8 @@ def create_customers_google_manager(config_manager: ConfigManager):
 
     print(f"Creating CustomersFile manager", file=sys.stderr)
 
+    module_name = 'customers'
+
     config = _get_default_config(config_manager)
     service_config = config.get_service_config()
     drive_service = GDriveService(service_config)
@@ -185,6 +188,10 @@ def create_customers_google_manager(config_manager: ConfigManager):
     if not sheet_1_id or not sheet_2_id:
         raise ValueError("Google Sheet IDs not configured. Please set customer_sheet_1_id and customer_sheet_2_id in config.yaml")
 
-    return CustomersFile(drive_service, config_manager, column_letter_1=column_letter_1, column_letter_2=column_letter_2, column_letter_2_filter=column_letter_2_filter, sheet_1_id=sheet_1_id, sheet_2_id=sheet_2_id, sheet_1_name=sheet_1_name, sheet_2_name=sheet_2_name)
+    # Create mail service if mail config exists
+    mail_config = config.get_mail_config_by_name(module_name)
+    mail_service = create_mail_service(module_name, mail_config, service_config)
+
+    return CustomersFile(drive_service, config_manager, module_name, mail_service, column_letter_1=column_letter_1, column_letter_2=column_letter_2, column_letter_2_filter=column_letter_2_filter, sheet_1_id=sheet_1_id, sheet_2_id=sheet_2_id, sheet_1_name=sheet_1_name, sheet_2_name=sheet_2_name)
 
     

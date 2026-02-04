@@ -13,13 +13,14 @@ from pathlib import Path
 from .google_drive_utils import BaseProcess
 from .config import _get_default_config
 from common_utils.config_manager import ConfigManager
-from common_utils.item_endpoints import get_db_connection
 from .spreadsheet_updaters.base import BaseSpreadsheetUpdater
 from .spreadsheet_updaters.gap_spreadsheet_updater import GapSpreadsheetUpdater
+from .mail_service import create_mail_service
+from common_utils.db_connection import DatabaseConnection
 class FilterFile(BaseProcess):
 
-    def __init__(self, drive_service, config_manager: ConfigManager, customers_google_folder_id: str, customers_file_name_pattern: str, auto_dialer_file_name_pattern: str, allowed_gaps_sheet_config: Dict[str, Any], spreadsheet_updaters: List[BaseSpreadsheetUpdater]):
-        super().__init__(drive_service, config_manager, "filter", spreadsheet_updaters=spreadsheet_updaters)
+    def __init__(self, drive_service, config_manager: ConfigManager, name: str, spreadsheet_updaters: List[BaseSpreadsheetUpdater], mail_service, customers_google_folder_id: str, customers_file_name_pattern: str, auto_dialer_file_name_pattern: str, allowed_gaps_sheet_config: Dict[str, Any]):
+        super().__init__(drive_service, config_manager, name, spreadsheet_updaters=spreadsheet_updaters, mail_service=mail_service)
         
         self.customers_google_folder_id = customers_google_folder_id
         self.customers_file_name_pattern = customers_file_name_pattern
@@ -42,13 +43,15 @@ class FilterFile(BaseProcess):
             nick_name = kwargs.get('nick_name')
             customers, customers_input_file = self._get_customers(input_file_path)
 
+            print(f"nickname: {nick_name}", file=sys.stderr)
+
             print(f"Input file path: {customers_input_file} caller id: {caller_id}", file=sys.stderr)
         
             # Create summarize_data with header values (A1-A4): [date, time, customers_input_file, caller_id]
             from datetime import datetime
             current_datetime = datetime.now()
             date_str = current_datetime.strftime("%d.%m.%Y")
-            time_str = current_datetime.strftime("%H.%M")
+            time_str = current_datetime.strftime("%H:%M")
             summarize_data = {
                 'date_str': date_str,
                 'time_str': time_str,
@@ -499,9 +502,11 @@ def create_filter_google_manager(config_manager: ConfigManager):
     service_config = config.get_service_config()
     drive_service = GDriveService(service_config)
 
+    module_name = 'filter'
+
     print(f"Drive service created", file=sys.stderr)
 
-    output_files_config = config.get_output_files_config('filter')
+    output_files_config = config.get_output_files_config(module_name)
 
     spreadsheet_updaters = []
 
@@ -509,8 +514,7 @@ def create_filter_google_manager(config_manager: ConfigManager):
         spreadsheet_updater = GapSpreadsheetUpdater(drive_service, sheet_config, sheet_name_key)
         spreadsheet_updaters.append(spreadsheet_updater)
 
-    allowed_gaps_sheet_config = config.get_input_files_config('filter').get('allowed_gaps_sheet', {})
-
+    allowed_gaps_sheet_config = config.get_input_files_config(module_name).get('allowed_gaps_sheet', {})
 
     customers_google_folder_id = config.get_google_folder_id_by_name('customers', 'intermidiate')
 
@@ -520,4 +524,8 @@ def create_filter_google_manager(config_manager: ConfigManager):
 
     print(f"Customers Google folder ID: {customers_google_folder_id}, Customers file name pattern: {customers_file_name_pattern} auto dialer file name pattern: {auto_dialer_file_name_pattern}", file=sys.stderr)
 
-    return FilterFile(drive_service, config_manager, customers_google_folder_id, customers_file_name_pattern, auto_dialer_file_name_pattern, allowed_gaps_sheet_config, spreadsheet_updaters)
+    # Create mail service if mail config exists
+    mail_config = config.get_mail_config_by_name(module_name)
+    mail_service = create_mail_service(module_name, mail_config, service_config) if mail_config else None
+
+    return FilterFile(drive_service, config_manager, module_name, spreadsheet_updaters, mail_service, customers_google_folder_id, customers_file_name_pattern, auto_dialer_file_name_pattern, allowed_gaps_sheet_config)

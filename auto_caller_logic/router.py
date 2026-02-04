@@ -18,6 +18,7 @@ from .filter_file import create_filter_google_manager
 from .customers_file import create_customers_google_manager
 from .gaps_actions_file import create_gaps_actions_google_manager
 from .paycall_utils import get_paycall_data
+from common_utils.gmail_service import GmailService
 from common_utils.item_endpoints import (
     AddItemRequest, AddItemResponse,
     UpdateItemRequest, UpdateItemResponse,
@@ -79,6 +80,7 @@ class ModifySettingsRequest(BaseModel):
     filter_sheets_config: Optional[Dict[str, Dict[str, Any]]] = None  # Dictionary where keys are sheet names ("allowed_gaps_sheet", "gaps_sheet") and values are sheet configs
     main_google_folder_id: Optional[str] = None  # Main Google folder ID to update
     gaps_sheet_config: Optional[Dict[str, Any]] = None  # Gaps sheet configuration to update
+    mail_config: Optional[Dict[str, Any]] = None  # Mail configuration to update. Structure: {"<module>": {<mail_config>}}
 
 class ModifySettingsResponse(BaseModel):
     success: bool
@@ -102,6 +104,14 @@ class EnterGapsResponse(BaseModel):
     """Response model for entering callers into gaps sheets."""
     success: bool
     global_gap_sheet_config: Optional[Dict[str, Any]] = None
+    error: Optional[str] = None
+    error_type: Optional[str] = None
+
+
+class TestEmailResponse(BaseModel):
+    """Response model for test email endpoint."""
+    success: bool
+    message: Optional[str] = None
     error: Optional[str] = None
     error_type: Optional[str] = None
 
@@ -255,6 +265,8 @@ async def create_filter(request: CreateFilterRequest):
         )
 
         nick_name = _get_caller_nick_name(request.caller_id)
+
+        print(f"Nick name: {nick_name}", file=sys.stderr)
 
         # Create filter
         config_manager = _get_config()
@@ -485,6 +497,16 @@ async def get_settings(settings_config: str = Query(..., description="JSON dicti
         if "main_google_folder_id" in settings_config_dict:
             main_google_folder_id = config.get_main_google_folder_id()
             config_response["main_google_folder_id"] = main_google_folder_id
+
+        if "mail_config" in settings_config_dict:
+            mail_config_str = settings_config_dict["mail_config"]
+
+            print(f"Mail config str: {mail_config_str}", file=sys.stderr)
+
+            config_response["mail-config"] = config.get_mail_config(mail_config_str)
+        else:
+            print("Mail config is not found", file=sys.stderr)
+
                 
         return GetSettingsResponse(
             success=True,
@@ -553,6 +575,13 @@ async def modify_settings(request: ModifySettingsRequest):
                 
                 updated_items.append('gaps_sheet_config')
                 config_response['gaps_sheet_config'] = gaps_sheet_config
+        if "mail_config" in request_dict:
+            mail_config = request_dict["mail_config"]
+            
+            if mail_config:
+                mail_config_response = config.update_mail_config(mail_config)
+                updated_items.append('mail_config')
+                config_response['mail_config'] = mail_config_response
         
         if not updated_items:
             return ModifySettingsResponse(
@@ -729,6 +758,101 @@ async def edit_list(
     return await edit_list_endpoint(request, list_type, _get_db_connection, _get_config)
 
 
-
+@router.get("/test-email", response_model=TestEmailResponse)
+async def test_email():
+    """
+    Test endpoint for sending email.
+    Uses mail config from 'filter' and sends a test email with simple title and subtitle.
+    """
+    try:
+        config_manager = _get_config()
+        config = _get_default_config(config_manager)
+        
+        # Get mail config for 'filter'
+        mail_config = config.get_mail_config_by_name('filter')
+        if not mail_config:
+            return TestEmailResponse(
+                success=False,
+                error="Mail config not found for 'filter'",
+                error_type="ConfigError"
+            )
+        
+        # Get service config for Gmail authentication
+        service_config = config.get_service_config()
+        
+        # Use a separate token file for Gmail to avoid scope conflicts
+        gmail_service_config = service_config.copy()
+        if 'pickle_file_path' in gmail_service_config:
+            token_path = gmail_service_config['pickle_file_path']
+            # Replace token_sheets.pickle with token_gmail.pickle
+            if 'token_sheets.pickle' in token_path:
+                gmail_token_path = token_path.replace('token_sheets.pickle', 'token_gmail.pickle')
+            else:
+                # If different naming, append _gmail before .pickle
+                base_path = token_path.rsplit('.', 1)[0]
+                gmail_token_path = f"{base_path}_gmail.pickle"
+            gmail_service_config['pickle_file_path'] = gmail_token_path
+        
+        # Initialize Gmail service
+        gmail_service = GmailService(gmail_service_config)
+        
+        # Get recipients from config
+        recipients = mail_config.get('recipients', [])
+        if isinstance(recipients, str):
+            recipient_list = [r.strip() for r in recipients.split(',') if r.strip()]
+        elif isinstance(recipients, list):
+            recipient_list = recipients
+        else:
+            return TestEmailResponse(
+                success=False,
+                error="Invalid recipients format in config",
+                error_type="ConfigError"
+            )
+        
+        if not recipient_list:
+            return TestEmailResponse(
+                success=False,
+                error="No recipients specified in config",
+                error_type="ConfigError"
+            )
+        
+        # Get CC recipients
+        cc_recipients = mail_config.get('cc_recipients', [])
+        cc_emails = None
+        if cc_recipients:
+            if isinstance(cc_recipients, str):
+                cc_emails = [r.strip() for r in cc_recipients.split(',') if r.strip()]
+            elif isinstance(cc_recipients, list):
+                cc_emails = cc_recipients
+        
+        # Use simple title and subtitle for testing
+        title = "Test Email"
+        subtitle = "This is a test email from the auto dialer service"
+        body = "This is a test email to verify the email sending functionality."
+        
+        # Send email
+        to_email = recipient_list[0]
+        subject = f"{title} - {subtitle}"
+        
+        result = gmail_service.send_email(
+            to=to_email,
+            subject=subject,
+            body=body,
+            cc=cc_emails
+        )
+        
+        return TestEmailResponse(
+            success=True,
+            message=f"Test email sent successfully to {to_email} (Message ID: {result.get('message_id')})"
+        )
+        
+    except Exception as e:
+        print(f"Error sending test email: {e}", file=sys.stderr)
+        print(f"Error type: {type(e).__name__}", file=sys.stderr)
+        return TestEmailResponse(
+            success=False,
+            error=str(e),
+            error_type=type(e).__name__
+        )
 
 
