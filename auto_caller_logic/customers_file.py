@@ -167,6 +167,7 @@ def create_customers_google_manager(config_manager: ConfigManager):
 
     config = _get_default_config(config_manager)
     service_config = config.get_service_config()
+    smtp_config = config.get_smtp_config()
     drive_service = GDriveService(service_config)
 
     print(f"Drive service created", file=sys.stderr)
@@ -190,7 +191,7 @@ def create_customers_google_manager(config_manager: ConfigManager):
 
     # Create mail service if mail config exists
     mail_config = config.get_mail_config_by_name(module_name)
-    mail_service = create_mail_service(module_name, mail_config, service_config)
+    mail_service = create_mail_service(module_name, mail_config, service_config={'smtp_config': smtp_config})
 
     return CustomersFile(drive_service, config_manager, module_name, mail_service, column_letter_1=column_letter_1, column_letter_2=column_letter_2, column_letter_2_filter=column_letter_2_filter, sheet_1_id=sheet_1_id, sheet_2_id=sheet_2_id, sheet_1_name=sheet_1_name, sheet_2_name=sheet_2_name)
 

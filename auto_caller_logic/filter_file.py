@@ -52,6 +52,7 @@ class FilterFile(BaseProcess):
             current_datetime = datetime.now()
             date_str = current_datetime.strftime("%d.%m.%Y")
             time_str = current_datetime.strftime("%H:%M")
+
             summarize_data = {
                 'date_str': date_str,
                 'time_str': time_str,
@@ -500,6 +501,7 @@ def create_filter_google_manager(config_manager: ConfigManager):
     config = _get_default_config(config_manager)
     print(f"Config created", file=sys.stderr)
     service_config = config.get_service_config()
+    smtp_config = config.get_smtp_config()
     drive_service = GDriveService(service_config)
 
     module_name = 'filter'
@@ -526,6 +528,7 @@ def create_filter_google_manager(config_manager: ConfigManager):
 
     # Create mail service if mail config exists
     mail_config = config.get_mail_config_by_name(module_name)
-    mail_service = create_mail_service(module_name, mail_config, service_config) if mail_config else None
+
+    mail_service = create_mail_service(module_name, mail_config, {'smtp_config': smtp_config}) if mail_config else None
 
     return FilterFile(drive_service, config_manager, module_name, spreadsheet_updaters, mail_service, customers_google_folder_id, customers_file_name_pattern, auto_dialer_file_name_pattern, allowed_gaps_sheet_config)

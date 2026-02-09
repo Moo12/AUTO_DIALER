@@ -76,6 +76,7 @@ def create_gaps_actions_google_manager(config_manager: ConfigManager):
     config = _get_default_config(config_manager)
     print(f"Config created", file=sys.stderr)
     service_config = config.get_service_config()
+    smtp_config = config.get_smtp_config()
     drive_service = GDriveService(service_config)
 
     print(f"Drive service created", file=sys.stderr)
@@ -92,7 +93,7 @@ def create_gaps_actions_google_manager(config_manager: ConfigManager):
 
     # Create mail service if mail config exists
     mail_config = config.get_mail_config_by_name(module_name)
-    mail_service = create_mail_service(module_name, mail_config, service_config)
+    mail_service = create_mail_service(module_name, mail_config, service_config={'smtp_config': smtp_config})
 
     return GapsActionsFile(drive_service, config_manager, module_name, spreadsheet_updaters, mail_service)
 

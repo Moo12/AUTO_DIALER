@@ -187,6 +187,16 @@ class Config:
             'credentials_file_path': service_config.get('credentials_file_path', '')
         }
     
+    def get_smtp_config(self) -> Dict[str, str]:
+        """
+        Get SMTP configuration.
+        
+        Returns:
+            Dictionary with SMTP configuration
+        """
+        config = self.get_config()
+        return config.get('smtp_config', {})
+    
     def get_output_config(self) -> Dict[str, str]:
         """
         Get output configuration.
