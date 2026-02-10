@@ -18,6 +18,7 @@ from .filter_file import create_filter_google_manager
 from .customers_file import create_customers_google_manager
 from .gaps_actions_file import create_gaps_actions_google_manager
 from .paycall_utils import get_paycall_data
+from .mail_service import create_mail_service
 from common_utils.gmail_service import GmailService
 from common_utils.item_endpoints import (
     AddItemRequest, AddItemResponse,
@@ -103,7 +104,7 @@ class EnterGapsRequest(BaseModel):
 class EnterGapsResponse(BaseModel):
     """Response model for entering callers into gaps sheets."""
     success: bool
-    global_gap_sheet_config: Optional[Dict[str, Any]] = None
+    global_gap_sheet_config: Optional[List[Dict[str, Any]]] = None
     error: Optional[str] = None
     error_type: Optional[str] = None
 
@@ -358,11 +359,13 @@ async def enter_gaps(request: EnterGapsRequest):
         
         # Get post-process data
         post_data = gaps_actions_manager.get_post_data()
+
+        global_gap_sheet_config = gaps_actions_manager.get_global_gap_sheet_config()
+
+        print(f"Global gap sheet config: {global_gap_sheet_config}", file=sys.stderr)
         
         if post_data is None:
             raise ValueError("Post-process data is not available")
-        
-        global_gap_sheet_config = post_data.get('global_gap_sheet_config')
         
         print(f"Entered gaps: {len(request.callers_gap)} callers", file=sys.stderr)
         
@@ -759,10 +762,19 @@ async def edit_list(
 
 
 @router.get("/test-email", response_model=TestEmailResponse)
-async def test_email():
+async def test_email(
+    smtp: bool = Query(False, description="Use SMTP service instead of Gmail API"),
+    service_auth: bool = Query(False, description="Use Gmail API service authentication")
+):
     """
     Test endpoint for sending email.
     Uses mail config from 'filter' and sends a test email with simple title and subtitle.
+    
+    Args:
+        smtp: If True, use SMTP service. If False and service_auth is False, defaults to Gmail API.
+        service_auth: If True, use Gmail API service authentication. If False and smtp is False, defaults to Gmail API.
+    
+    Note: If both smtp and service_auth are False, Gmail API will be used by default.
     """
     try:
         config_manager = _get_config()
@@ -777,74 +789,94 @@ async def test_email():
                 error_type="ConfigError"
             )
         
-        # Get service config for Gmail authentication
-        service_config = config.get_service_config()
+        # Determine which service to use based on query parameters
+        use_smtp = smtp
+        use_gmail_api = service_auth or (not smtp and not service_auth)  # Default to Gmail API if neither specified
         
-        # Use a separate token file for Gmail to avoid scope conflicts
-        gmail_service_config = service_config.copy()
-        if 'pickle_file_path' in gmail_service_config:
-            token_path = gmail_service_config['pickle_file_path']
-            # Replace token_sheets.pickle with token_gmail.pickle
-            if 'token_sheets.pickle' in token_path:
-                gmail_token_path = token_path.replace('token_sheets.pickle', 'token_gmail.pickle')
-            else:
-                # If different naming, append _gmail before .pickle
-                base_path = token_path.rsplit('.', 1)[0]
-                gmail_token_path = f"{base_path}_gmail.pickle"
-            gmail_service_config['pickle_file_path'] = gmail_token_path
+        # Get service config
+        base_service_config = config.get_service_config()
         
-        # Initialize Gmail service
-        gmail_service = GmailService(gmail_service_config)
-        
-        # Get recipients from config
-        recipients = mail_config.get('recipients', [])
-        if isinstance(recipients, str):
-            recipient_list = [r.strip() for r in recipients.split(',') if r.strip()]
-        elif isinstance(recipients, list):
-            recipient_list = recipients
+        if use_smtp:
+            # Prepare SMTP config
+            # Get SMTP config from config file
+            smtp_config = config.get_smtp_config()
+            
+            if not smtp_config or not smtp_config.get('smtp_server'):
+                return TestEmailResponse(
+                    success=False,
+                    error="SMTP configuration not found. Please configure SMTP settings.",
+                    error_type="ConfigError"
+                )
+            
+            # Create SMTP mail service
+            # Pass smtp_config directly or wrap it
+            service_config = {'smtp_config': smtp_config} if 'smtp_server' not in smtp_config else smtp_config
+            mail_service = create_mail_service('filter', mail_config, service_config)
+            
+            if not mail_service:
+                return TestEmailResponse(
+                    success=False,
+                    error="Failed to initialize SMTP mail service",
+                    error_type="ServiceError"
+                )
         else:
+            # Use Gmail API
+            # Use a separate token file for Gmail to avoid scope conflicts
+            gmail_service_config = base_service_config.copy()
+            if 'pickle_file_path' in gmail_service_config:
+                token_path = gmail_service_config['pickle_file_path']
+                # Replace token_sheets.pickle with token_gmail.pickle
+                if 'token_sheets.pickle' in token_path:
+                    gmail_token_path = token_path.replace('token_sheets.pickle', 'token_gmail.pickle')
+                else:
+                    # If different naming, append _gmail before .pickle
+                    base_path = token_path.rsplit('.', 1)[0]
+                    gmail_token_path = f"{base_path}_gmail.pickle"
+                gmail_service_config['pickle_file_path'] = gmail_token_path
+            
+            # Create Gmail API mail service
+            mail_service = create_mail_service('filter', mail_config, gmail_service_config)
+            
+            if not mail_service:
+                return TestEmailResponse(
+                    success=False,
+                    error="Failed to initialize Gmail API mail service",
+                    error_type="ServiceError"
+                )
+        
+        # Prepare test email data
+        mail_data = {
+            'title': 'Test Email',
+            'subtitle': 'This is a test email from the auto dialer service',
+            'body': 'This is a test email to verify the email sending functionality.'
+        }
+        
+        # Send email using MailService interface
+        try:
+            mail_service.send_mail(mail_data=mail_data)
+            
+            # Get recipient for success message
+            recipients = mail_config.get('recipients', [])
+            if isinstance(recipients, str):
+                recipient_list = [r.strip() for r in recipients.split(',') if r.strip()]
+            elif isinstance(recipients, list):
+                recipient_list = recipients
+            else:
+                recipient_list = []
+            
+            to_email = recipient_list[0] if recipient_list else "recipients"
+            service_type = "SMTP" if use_smtp else "Gmail API"
+            
+            return TestEmailResponse(
+                success=True,
+                message=f"Test email sent successfully via {service_type} to {to_email}"
+            )
+        except Exception as send_error:
             return TestEmailResponse(
                 success=False,
-                error="Invalid recipients format in config",
-                error_type="ConfigError"
+                error=f"Failed to send email: {str(send_error)}",
+                error_type=type(send_error).__name__
             )
-        
-        if not recipient_list:
-            return TestEmailResponse(
-                success=False,
-                error="No recipients specified in config",
-                error_type="ConfigError"
-            )
-        
-        # Get CC recipients
-        cc_recipients = mail_config.get('cc_recipients', [])
-        cc_emails = None
-        if cc_recipients:
-            if isinstance(cc_recipients, str):
-                cc_emails = [r.strip() for r in cc_recipients.split(',') if r.strip()]
-            elif isinstance(cc_recipients, list):
-                cc_emails = cc_recipients
-        
-        # Use simple title and subtitle for testing
-        title = "Test Email"
-        subtitle = "This is a test email from the auto dialer service"
-        body = "This is a test email to verify the email sending functionality."
-        
-        # Send email
-        to_email = recipient_list[0]
-        subject = f"{title} - {subtitle}"
-        
-        result = gmail_service.send_email(
-            to=to_email,
-            subject=subject,
-            body=body,
-            cc=cc_emails
-        )
-        
-        return TestEmailResponse(
-            success=True,
-            message=f"Test email sent successfully to {to_email} (Message ID: {result.get('message_id')})"
-        )
         
     except Exception as e:
         print(f"Error sending test email: {e}", file=sys.stderr)
