@@ -8,7 +8,7 @@ on database tables using ItemManager and ListManager.
 import os
 import sys
 from pathlib import Path
-from typing import Optional, Dict, Any, List, Callable
+from typing import Optional, Dict, Any, List, Callable, Union
 from fastapi import HTTPException, Query
 from pydantic import BaseModel
 
@@ -97,8 +97,8 @@ class EditListRequest(BaseModel):
     list_id: int
     list_name: Optional[str] = None  # New name for the list
     is_active: Optional[int] = None  # 1 to activate, 0 to deactivate
-    add_users: Optional[List[int]] = None  # Array of user IDs to add to the list
-    remove_users: Optional[List[int]] = None  # Array of user IDs to remove from the list
+    users: Optional[List[Dict[str, Any]]] = None  # Users to add/update. Behavior depends on add_users_only flag.
+    add_users_only: bool = False  # If True, only add/update users without removing existing ones. If False, users represents desired final state (full sync).
 
 
 class EditListResponse(BaseModel):
@@ -108,7 +108,22 @@ class EditListResponse(BaseModel):
     list_name: Optional[str] = None
     is_active: Optional[int] = None
     users_added: int = 0
+    users_updated: int = 0
     users_removed: int = 0
+    error: Optional[str] = None
+    error_type: Optional[str] = None
+
+
+class RemoveListRequest(BaseModel):
+    """Request model for removing a list."""
+    list_id: int  # ID of the list to remove
+
+
+class RemoveListResponse(BaseModel):
+    """Response model for remove list endpoint."""
+    success: bool
+    list_id: int
+    rows_affected: int = 0
     error: Optional[str] = None
     error_type: Optional[str] = None
 
@@ -256,7 +271,8 @@ def get_config(
 async def add_item_endpoint(
     request: AddItemRequest,
     get_db_func: Optional[Callable[[], DatabaseConnection]] = None,
-    get_config_func: Optional[Callable[[], ConfigManager]] = None
+    get_config_func: Optional[Callable[[], ConfigManager]] = None,
+    converter_func: Optional[Callable[[Dict[str, Any], str, ConfigManager], Dict[str, Any]]] = None
 ) -> AddItemResponse:
     """
     Add an item to a database table.
@@ -265,6 +281,9 @@ async def add_item_endpoint(
         request: AddItemRequest with item_type and field_values
         get_db_func: Optional function to get database connection (if None, uses default)
         get_config_func: Optional function to get config manager (if None, uses default)
+        converter_func: Optional function to convert request data before insertion.
+                       Signature: (request_data: Dict[str, Any], item_type: str, config_manager: ConfigManager) -> Dict[str, Any]
+                       If None, uses field_values as-is.
     
     Returns:
         AddItemResponse with operation result
@@ -279,9 +298,18 @@ async def add_item_endpoint(
             config_manager = get_config_func()
         else:
             config_manager = get_config()
+
+        print(f"request.item_type: {request.item_type}", file=sys.stderr)
+        print(f"request.field_values: {request.field_values}", file=sys.stderr)
+        
+        # Convert data if converter function is provided
+        field_values = request.field_values
+        if converter_func:
+            field_values = converter_func(request.field_values, request.item_type, config_manager)
+            print(f"converted field_values: {field_values}", file=sys.stderr)
         
         item_manager = ItemManager(request.item_type, db_connection, config_manager)
-        result = item_manager.add_item(request.field_values)
+        result = item_manager.add_item(field_values)
         
         return AddItemResponse(
             success=result.get('success', False),
@@ -305,7 +333,8 @@ async def add_item_endpoint(
 async def update_item_endpoint(
     request: UpdateItemRequest,
     get_db_func: Optional[Callable[[], DatabaseConnection]] = None,
-    get_config_func: Optional[Callable[[], ConfigManager]] = None
+    get_config_func: Optional[Callable[[], ConfigManager]] = None,
+    converter_func: Optional[Callable[[Dict[str, Any], str, ConfigManager], Dict[str, Any]]] = None
 ) -> UpdateItemResponse:
     """
     Update one or more rows in a database table.
@@ -314,6 +343,9 @@ async def update_item_endpoint(
         request: UpdateItemRequest with item_type, where, and field_values
         get_db_func: Optional function to get database connection (if None, uses default)
         get_config_func: Optional function to get config manager (if None, uses default)
+        converter_func: Optional function to convert request data before update.
+                       Signature: (request_data: Dict[str, Any], item_type: str, config_manager: ConfigManager) -> Dict[str, Any]
+                       If None, uses field_values as-is.
     
     Returns:
         UpdateItemResponse with operation result
@@ -329,8 +361,14 @@ async def update_item_endpoint(
         else:
             config_manager = get_config()
         
+        # Convert data if converter function is provided
+        field_values = request.field_values
+        if converter_func:
+            field_values = converter_func(request.field_values, request.item_type, config_manager)
+            print(f"converted field_values: {field_values}", file=sys.stderr)
+        
         item_manager = ItemManager(request.item_type, db_connection, config_manager)
-        result = item_manager.update_item(where=request.where, field_values=request.field_values)
+        result = item_manager.update_item(where=request.where, field_values=field_values)
 
         return UpdateItemResponse(
             success=result.get('success', False),
@@ -525,15 +563,14 @@ async def edit_list_endpoint(
         has_operation = (
             request.list_name is not None or
             request.is_active is not None or
-            request.add_users is not None or
-            request.remove_users is not None
+            request.users is not None
         )
         
         if not has_operation:
             return EditListResponse(
                 success=False,
                 list_id=request.list_id,
-                error="At least one operation must be specified (list_name, is_active, add_users, or remove_users)",
+                error="At least one operation must be specified (list_name, is_active, or users)",
                 error_type="ValueError"
             )
         
@@ -552,8 +589,8 @@ async def edit_list_endpoint(
             list_id=request.list_id,
             list_name=request.list_name,
             is_active=request.is_active,
-            add_users=request.add_users,
-            remove_users=request.remove_users
+            users=request.users,
+            add_users_only=request.add_users_only
         )
         
         if result.get('success', False):
@@ -563,6 +600,7 @@ async def edit_list_endpoint(
                 list_name=result.get('list_name'),
                 is_active=result.get('is_active'),
                 users_added=result.get('users_added', 0),
+                users_updated=result.get('users_updated', 0),
                 users_removed=result.get('users_removed', 0),
                 error=None,
                 error_type=None
@@ -584,6 +622,69 @@ async def edit_list_endpoint(
         return EditListResponse(
             success=False,
             list_id=request.list_id if hasattr(request, 'list_id') else 0,
+            error=error_msg,
+            error_type=error_type
+        )
+
+
+async def remove_list_endpoint(
+    request: RemoveListRequest,
+    list_type: str,
+    get_db_func: Optional[Callable[[], DatabaseConnection]] = None,
+    get_config_func: Optional[Callable[[], ConfigManager]] = None
+) -> RemoveListResponse:
+    """
+    Remove (delete) a list and all its user associations.
+    
+    Args:
+        request: RemoveListRequest with list_id
+        list_type: Type key that matches data_base_tables configuration
+        get_db_func: Optional function to get database connection (if None, uses default)
+        get_config_func: Optional function to get config manager (if None, uses default)
+    
+    Returns:
+        RemoveListResponse with operation result
+    """
+    try:
+        if get_db_func:
+            db_connection = get_db_func()
+        else:
+            db_connection = get_db_connection()
+        
+        if get_config_func:
+            config_manager = get_config_func()
+        else:
+            config_manager = get_config()
+        
+        list_manager = ListManager(list_type, db_connection, config_manager)
+        result = list_manager.remove_list(list_id=request.list_id)
+        
+        if result.get('success', False):
+            return RemoveListResponse(
+                success=True,
+                list_id=result['list_id'],
+                rows_affected=result.get('rows_affected', 0),
+                error=None,
+                error_type=None
+            )
+        else:
+            error_msg = result.get('error', 'Unknown error')
+            return RemoveListResponse(
+                success=False,
+                list_id=request.list_id,
+                rows_affected=0,
+                error=error_msg,
+                error_type=result.get('error_type', 'OperationError')
+            )
+        
+    except Exception as e:
+        error_type = type(e).__name__
+        error_msg = str(e)
+        print(f"✗ Error removing list: {error_msg}", file=sys.stderr)
+        return RemoveListResponse(
+            success=False,
+            list_id=request.list_id if hasattr(request, 'list_id') else 0,
+            rows_affected=0,
             error=error_msg,
             error_type=error_type
         )

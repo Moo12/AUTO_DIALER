@@ -9,7 +9,7 @@ import base64
 import tempfile
 import os
 from pathlib import Path
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Union, Callable
 from fastapi import APIRouter, HTTPException, Query, Depends
 from pydantic import BaseModel
 
@@ -22,12 +22,26 @@ from common_utils.item_endpoints import (
     RemoveItemRequest, RemoveItemResponse,
     GetItemsResponse,
     GetListsResponse, EditListRequest, EditListResponse,
+    RemoveListRequest, RemoveListResponse,
     get_db_connection, get_config,
     add_item_endpoint, update_item_endpoint, remove_item_endpoint,
-    get_items_endpoint, get_lists_endpoint, edit_list_endpoint
+    get_items_endpoint, get_lists_endpoint, edit_list_endpoint, remove_list_endpoint
+)
+from common_utils.item_manager import ItemManager
+from .spammers_tables_handler import SpammersTablesHandler
+from .item_converters import (
+    BaseItemConverter,
+    SpamPatternsConverter,
+    CompetingCompanyConfigsConverter
 )
 
 router = APIRouter(prefix="/api/settings", tags=["settings-backend"])
+
+# ============================================================================
+# Constants
+# ============================================================================
+
+
 
 # Request/Response Models
 class ConvertTableToExcelRequest(BaseModel):
@@ -360,7 +374,7 @@ async def convert_excel_to_table(
     """
     temp_file_path = None
 
-    print(f"convert_excel_to_table request")
+    print(f"convert_excel_to_table request {request.list_config}")
     try:
         # Decode base64 file content
         try:
@@ -442,6 +456,7 @@ async def convert_excel_to_table(
                 rows_linked=result.get('rows_linked', 0)
             )
         else:
+            print(f"request.table_name: {request.table_name}", file=sys.stderr)
             # Standard 1-step process (just import Excel)
             excel_handler = _get_excel_handler()
             
@@ -549,8 +564,43 @@ async def edit_list(
             - users_added: Number of users added
             - users_removed: Number of users removed
             - error: Error message if operation failed
+    
+    Special handling: If deactivating a list (is_active=0), triggers cleanup of orphaned detections.
     """
-    return await edit_list_endpoint(request, list_type, _get_db_connection, _get_config)
+    # Execute the edit first
+    result = await edit_list_endpoint(request, list_type, _get_db_connection, _get_config)
+    
+    return result
+
+
+@router.post("/lists/remove", response_model=RemoveListResponse)
+async def remove_list(
+    request: RemoveListRequest,
+    list_type: str = Query(..., description="Type key that matches data_base_tables configuration (e.g., 'special_users')")
+):
+    """
+    Remove (delete) a list and all its user associations.
+    
+    Args:
+        request: RemoveListRequest with:
+            - list_id: ID of the list to remove (required)
+        list_type: Type key that matches data_base_tables configuration
+        
+    Returns:
+        RemoveListResponse with:
+            - success: bool
+            - list_id: int
+            - rows_affected: Number of rows deleted (junction table + list table)
+            - error: Error message if operation failed
+            - error_type: Type of error if operation failed
+    
+    This operation:
+    1. Removes all user-list mappings from the junction table
+    2. Deletes the list from the lists table
+    """
+    result = await remove_list_endpoint(request, list_type, _get_db_connection, _get_config)
+    
+    return result
 
 
 @router.get("/items", response_model=GetItemsResponse)
@@ -575,6 +625,31 @@ async def get_items(
     return await get_items_endpoint(item_type, include_foreign, _get_db_connection, _get_config)
 
 
+def _create_item_converter(item_type: str) -> Optional[Callable[[Dict[str, Any], str, ConfigManager], Dict[str, Any]]]:
+    """
+    Factory function that creates converter functions based on item_type.
+    
+    Args:
+        item_type: Type key that matches data_base_tables configuration
+    
+    Returns:
+        Converter function if item_type has a converter, None otherwise
+    """
+    # Map item_type to converter class
+    converter_map = {
+        "spam_patterns": SpamPatternsConverter,
+        "competing_company_configs": CompetingCompanyConfigsConverter,
+    }
+    
+    converter_class = converter_map.get(item_type)
+    if converter_class is None:
+        print(f"converter_class is None for item_type: {item_type}", file=sys.stderr)
+        return None
+    
+    # Return the convert method as a callable
+    return converter_class.convert
+
+
 @router.post("/add-item", response_model=AddItemResponse)
 async def add_item(request: AddItemRequest):
     """
@@ -596,8 +671,21 @@ async def add_item(request: AddItemRequest):
             - error: Error message if operation failed
             - error_type: Type of error if operation failed
     """
-    return await add_item_endpoint(request, _get_db_connection, _get_config)
+    # Check if conversion is needed
+    converter_func = None
+    config_manager = _get_config()
+    config = config_manager.get_config()
+    item_config = config.get('data_base_tables', {}).get(request.item_type, {})
+    
+    if item_config.get('convert_on_add_item', False):
 
+        converter_func = _create_item_converter(request.item_type)
+        if converter_func is None:
+            print(f"⚠️  Warning: convert_on_add_item is true for '{request.item_type}' but no converter found", file=sys.stderr)
+    
+    result = await add_item_endpoint(request, _get_db_connection, _get_config, converter_func)
+    
+    return result
 
 @router.post("/update-item", response_model=UpdateItemResponse)
 async def update_item(request: UpdateItemRequest):
@@ -607,8 +695,14 @@ async def update_item(request: UpdateItemRequest):
     - Table is derived from request.item_type via data_base_tables config.
     - Rows are selected by exact-match filters in `where` (ANDed).
     - Columns updated are taken from `field_values`.
+    
+    Special handling: If deactivating spam_patterns, competing_company_configs, or lists,
+    triggers cleanup of orphaned detections and phone_numbers.
     """
-    return await update_item_endpoint(request, _get_db_connection, _get_config)
+    # Execute the update first
+    result = await update_item_endpoint(request, _get_db_connection, _get_config)
+    
+    return result
 
 
 @router.post("/remove-item", response_model=RemoveItemResponse)
@@ -621,6 +715,9 @@ async def remove_item(request: RemoveItemRequest):
     
     Default behavior: If `where` is empty and `item_id` is provided, automatically
     uses the primary key with `item_id` value for the WHERE clause.
+    
+    Special handling: If removing spam_patterns, competing_company_configs, or lists,
+    triggers cleanup of orphaned detections and phone_numbers.
     
     Args:
         request: RemoveItemRequest with:
@@ -636,7 +733,183 @@ async def remove_item(request: RemoveItemRequest):
             - error: Error message if operation failed
             - error_type: Type of error if operation failed
     """
-    return await remove_item_endpoint(request, _get_db_connection, _get_config)
+    # Execute the removal first
+    result = await remove_item_endpoint(request, _get_db_connection, _get_config)
+    
+    return result
+
+
+# Request/Response Models for Mail Titles
+class GetMailTitlesRequest(BaseModel):
+    """Request model for getting mail titles."""
+    phone_number: str
+    additional_params: Optional[Dict[str, Any]] = None  # Dictionary for additional parameters (e.g., company_id)
+
+
+class GetMailTitlesResponse(BaseModel):
+    """Response model for mail titles endpoint."""
+    success: bool
+    mail_title: Optional[str] = None
+    mail_subtitle: Optional[str] = None
+    matched_sources: Optional[List[Dict[str, Any]]] = None
+    error: Optional[str] = None
+    error_type: Optional[str] = None
+
+
+@router.post("/get-mail-titles", response_model=GetMailTitlesResponse)
+async def get_mail_titles(request: GetMailTitlesRequest):
+    """
+    Get resolved mail title and subtitle for a phone number.
+    
+    Checks the phone number against all spam sources in priority order and returns
+    the resolved mail title and subtitle based on the highest priority match.
+    
+    Priority order:
+    1. special_users (excel_list)
+    2. pattern (spam_patterns)
+    3. company (competing_company_configs)
+    4. main_phone_table (phone_numbers)
+    
+    Args:
+        request: GetMailTitlesRequest with:
+            - phone_number: Phone number to check
+            - additional_params: Optional dictionary with additional parameters (e.g., {"company_id": 1})
+    
+    Returns:
+        GetMailTitlesResponse with:
+            - success: bool
+            - mail_title: Resolved mail title (highest priority match)
+            - mail_subtitle: Resolved mail subtitle
+            - matched_sources: List of all matching sources with their titles
+            - error: Error message if operation failed
+            - error_type: Type of error if operation failed
+    """
+    try:
+        db_connection = _get_db_connection()
+        config_manager = _get_config()
+        config = config_manager.get_config()
+        
+        # Build handler config
+        handler_config = {
+            'spam_sources': config.get('spam_sources', {}),
+            'data_base_tables': config.get('data_base_tables', {})
+        }
+        
+        # Create handler instance
+        handler = SpammersTablesHandler(db_connection, handler_config)
+        
+        # Check phone number and get titles
+        additional_params = request.additional_params or {}
+        result = handler.check_phone_number(
+            phone_number=request.phone_number,
+            additional_params=additional_params
+        )
+        
+        return GetMailTitlesResponse(
+            success=result.get('success', False),
+            mail_title=result.get('mail_title'),
+            mail_subtitle=result.get('mail_subtitle'),
+            matched_sources=result.get('matched_sources'),
+            error=None,
+            error_type=None
+        )
+        
+    except Exception as e:
+        error_type = type(e).__name__
+        error_msg = str(e)
+        print(f"✗ Error getting mail titles: {error_msg}", file=sys.stderr)
+        return GetMailTitlesResponse(
+            success=False,
+            mail_title=None,
+            mail_subtitle=None,
+            matched_sources=None,
+            error=error_msg,
+            error_type=error_type
+        )
+
+
+class GetDetectionSourcesRequest(BaseModel):
+    """Request model for getting detection sources."""
+    phone_number: str
+    additional_params: Optional[Dict[str, Any]] = None  # Dictionary for additional parameters (e.g., company_id)
+
+
+class DetectionSource(BaseModel):
+    """Model for a detection source."""
+    source_name: str
+    source_id: Any
+
+
+class GetDetectionSourcesResponse(BaseModel):
+    """Response model for detection sources endpoint."""
+    success: bool
+    detection_sources: List[DetectionSource] = []
+    error: Optional[str] = None
+    error_type: Optional[str] = None
+
+
+@router.post("/get-detection-sources", response_model=GetDetectionSourcesResponse)
+async def get_detection_sources(request: GetDetectionSourcesRequest):
+    """
+    Get all detection sources that match a phone number.
+    
+    Returns a list of detection sources, where each source contains:
+    - source_name: The type of source (e.g., 'pattern', 'company', 'special_users', 'main_phone_table')
+    - source_id: The ID of the matching record in that source
+    
+    Args:
+        request: GetDetectionSourcesRequest with:
+            - phone_number: Phone number to check
+            - additional_params: Optional dictionary with additional parameters (e.g., {"company_id": 1})
+    
+    Returns:
+        GetDetectionSourcesResponse with:
+            - success: bool
+            - detection_sources: List of detection sources with source_name and source_id
+            - error: Error message if operation failed
+            - error_type: Type of error if operation failed
+    """
+    try:
+        db_connection = _get_db_connection()
+        config_manager = _get_config()
+        config = config_manager.get_config()
+        
+        # Build handler config
+        handler_config = {
+            'spam_sources': config.get('spam_sources', {}),
+            'data_base_tables': config.get('data_base_tables', {})
+        }
+        
+        # Create handler instance
+        handler = SpammersTablesHandler(db_connection, handler_config)
+        
+        # Get detection sources
+        additional_params = request.additional_params or {}
+        detection_sources = handler.get_detection_sources(
+            phone_number=request.phone_number,
+            additional_params=additional_params
+        )
+        
+        return GetDetectionSourcesResponse(
+            success=True,
+            detection_sources=[DetectionSource(**ds) for ds in detection_sources],
+            error=None,
+            error_type=None
+        )
+        
+    except Exception as e:
+        error_type = type(e).__name__
+        error_msg = str(e)
+        print(f"✗ Error getting detection sources: {error_msg}", file=sys.stderr)
+        return GetDetectionSourcesResponse(
+            success=False,
+            detection_sources=[],
+            error=error_msg,
+            error_type=error_type
+        )
+
+
+
 
 
 
