@@ -65,6 +65,15 @@ class GapsActionsFile(BaseProcess):
 
         return {'callers_gap': callers_gap, "metadata": self._metadata}
 
+    def get_mail_data(self) -> Dict[str, Any]:
+        if not self.post_data:
+            return {}
+        
+        return {
+            'number_of_gaps': len(self._callers_gap),
+            'nick_name': self._metadata.get('nick_name', '')
+        }
+
 
 def create_gaps_actions_google_manager(config_manager: ConfigManager):
     """Factory function to create GapsActionsFile instance."""
