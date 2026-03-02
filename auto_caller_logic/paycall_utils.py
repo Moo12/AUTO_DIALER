@@ -13,40 +13,45 @@ from common_utils.config_manager import ConfigManager
 from datetime import datetime
 
 
-def _load_paycall_config(config_manager: ConfigManager) -> Tuple[Dict[str, Any], Dict[str, Any], bool]:
+def _load_paycall_config(paycall_config: Any) -> Tuple[Dict[str, Any], Dict[str, Any], bool]:
     """
     Load and validate PayCall configuration.
-    
+    Accepts either a ConfigManager-like object (with get_paycall_* methods)
+    or a dict with structure {"paycall": {"api_url", "limit", "order_by", "retry"}}.
+
     Returns:
         Tuple of (config_dict, retry_config, is_valid)
     """
-    config = _get_default_config(config_manager)
-    paycall_account = config.get_paycall_account()
-    paycall_api_url = config.get_paycall_api_url()
-    paycall_limit = config.get_paycall_limit()
-    paycall_order_by = config.get_paycall_order_by()
-    retry_config = config.get_paycall_retry_config()
+    if isinstance(paycall_config, dict):
+        paycall = paycall_config.get("paycall", paycall_config)
+        paycall_api_url = paycall.get("api_url", "")
+        paycall_limit = paycall.get("limit", 500)
+        paycall_order_by = paycall.get("order_by", "asc")
+        retry = paycall.get("retry", {})
+        retry_config = {
+            "max_retries": retry.get("max_retries", 3),
+            "backoff_factor": retry.get("backoff_factor", 1.0),
+            "retryable_status_codes": retry.get("retryable_status_codes", [500, 502, 503, 504]),
+            "retry_on_timeout": retry.get("retry_on_timeout", True),
+        }
+    else:
+        paycall_api_url = paycall_config.get_paycall_api_url()
+        paycall_limit = paycall_config.get_paycall_limit()
+        paycall_order_by = paycall_config.get_paycall_order_by()
+        retry_config = paycall_config.get_paycall_retry_config()
 
-    api_url = paycall_api_url
-    username = paycall_account.get("email")
-    password = paycall_account.get("password")
-    user_id = paycall_account.get("paycall_id")
-    
     print(f"limit: {paycall_limit} order by: {paycall_order_by}", file=sys.stderr)
 
-    if not api_url or not username or not password:
+    if not paycall_api_url:
         print("⚠️  PayCall config missing url/username/password; skipping call.", file=sys.stderr)
         return {}, {}, False
-    
+
     config_dict = {
-        'api_url': api_url,
-        'username': username,
-        'password': password,
-        'user_id': user_id,
-        'limit': paycall_limit,
-        'order_by': paycall_order_by
+        "api_url": paycall_api_url,
+        "limit": paycall_limit,
+        "order_by": paycall_order_by,
     }
-    
+
     return config_dict, retry_config, True
 
 
@@ -314,17 +319,82 @@ def _filter_calls_by_time(
 
     return filtered_rows, reached_end_time, from_id
 
-
-def get_paycall_data(
-    config_manager: ConfigManager,
+def _get_all_accounts_paycall_calls(
+    paycall_config: dict[str, Any],
     caller_id: Optional[str],
     start_date: Optional[datetime],
     end_date: Optional[datetime],
-):
+) -> list[dict[str, Any]]:
     """
-    Fetch call data from PayCall according to the provided filters.
+    Get all accounts paycall calls.
+    """
+    all_rows = []
+
+    paycall_settings, retry_config, is_valid = _load_paycall_config({"paycall": paycall_config})
+
+    if not is_valid:
+        print(f"⚠️  PayCall config is not valid", file=sys.stderr)
+        return all_rows
+
+    for account in paycall_config["accounts"]:
+        account_config = {
+            "username": account["email"],
+            "password": account["password"],
+            "user_id": account["paycall_id"],
+        }
+
+        print(f"Fetching calls from {start_date} to {end_date} for account {account_config['username']}", file=sys.stderr)
+        all_rows.extend(
+            _get_paycall_data_single_account(
+                account_config, paycall_settings, retry_config, caller_id, start_date, end_date
+            )
+        )
+    return all_rows
+
+
+def get_paycall_data(
+    config_manager: Any,
+    caller_id: Optional[str],
+    start_date: Optional[datetime],
+    end_date: Optional[datetime],
+) -> list[dict[str, Any]]:
+    """
+    Public API: fetch call data from PayCall for all configured accounts.
+    Accepts either a ConfigManager (uses get_config().get('paycall')) or the paycall config dict.
 
     Args:
+        config_manager: ConfigManager instance or paycall config dict (with 'accounts', 'api_url', etc.).
+        caller_id: Caller phone (without leading 0) as string.
+        start_date: From date (datetime object).
+        end_date: To date (datetime object).
+
+    Returns:
+        List of rows (dict) from all accounts.
+    """
+    if hasattr(config_manager, "get_config"):
+        paycall_config = config_manager.get_config().get("paycall", {})
+    elif isinstance(config_manager, dict):
+        paycall_config = config_manager.get("paycall", config_manager)
+    else:
+        paycall_config = config_manager
+    return _get_all_accounts_paycall_calls(paycall_config, caller_id, start_date, end_date)
+
+
+def _get_paycall_data_single_account(
+    account_config: dict[str, Any],
+    paycall_config: dict[str, Any],
+    retry_config: dict[str, Any],
+    caller_id: Optional[str],
+    start_date: Optional[datetime],
+    end_date: Optional[datetime],
+) -> list[dict[str, Any]]:
+    """
+    Fetch call data from PayCall for a single account (internal use).
+
+    Args:
+        account_config: Account configuration (username, password, user_id).
+        paycall_config: Paycall API config (api_url, limit, order_by).
+        retry_config: Retry settings.
         caller_id: Caller phone (without leading 0) as string.
         start_date: From date (datetime object).
         end_date: To date (datetime object).
@@ -332,10 +402,6 @@ def get_paycall_data(
     Returns:
         List of rows (dict) parsed from the PayCall JSON response.
     """
-    # Load configuration
-    config_dict, retry_config, is_valid = _load_paycall_config(config_manager)
-    if not is_valid:
-        return []
 
     all_rows = []
     page = 1
@@ -350,19 +416,19 @@ def get_paycall_data(
             start_date=start_date,
             end_date=end_date,
             caller_id=caller_id,
-            user_id=config_dict['user_id'],
-            limit=config_dict['limit'],
-            order_by=config_dict['order_by'],
+            user_id=account_config['user_id'],
+            limit=paycall_config['limit'],
+            order_by=paycall_config['order_by'],
             from_id=from_id
         )
 
         # Make request with retry
         try:
             response = _make_paycall_request_with_retry(
-                api_url=config_dict['api_url'],
+                api_url=paycall_config['api_url'],
                 payload=payload,
-                username=config_dict['username'],
-                password=config_dict['password'],
+                username=account_config['username'],
+                password=account_config['password'],
                 retry_config=retry_config,
                 page=page
             )
@@ -381,7 +447,7 @@ def get_paycall_data(
             break
 
         # If the api_url contains "v2", reverse the response (bytes or string)
-        if "v2" in config_dict['api_url']:
+        if "v2" in paycall_config['api_url']:
             rows = rows[::-1]
 
         # Filter calls by time
@@ -398,13 +464,13 @@ def get_paycall_data(
         if reached_end_time:
             break
 
-        if len(rows) < config_dict['limit']:
-            print(f"   Reached end of data (got {len(rows)} < limit {config_dict['limit']})", file=sys.stderr)
+        if len(rows) < paycall_config['limit']:
+            print(f"   Reached end of data (got {len(rows)} < limit {paycall_config['limit']})", file=sys.stderr)
             break
 
         page += 1
 
     print(f"📥 Total retrieved: {len(all_rows)} records from PayCall (filtered by time range)", file=sys.stderr)
-    print(f"PayCall config used: api_url={config_dict['api_url']}, username={config_dict['username']}, paycall_id={config_dict['user_id']}, limit={config_dict['limit']}, order_by={config_dict['order_by']}", file=sys.stderr)
+    print(f"PayCall config used: api_url={paycall_config['api_url']}, username={account_config['username']}, paycall_id={account_config['user_id']}, limit={paycall_config['limit']}, order_by={paycall_config['order_by']}", file=sys.stderr)
     
     return all_rows
