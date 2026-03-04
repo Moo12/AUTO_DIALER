@@ -40,18 +40,22 @@ class CustomersFile(BaseProcess):
             column_letter=self.column_letter_1,
             column_condition_letter=self.column_letter_1_filter if hasattr(self, 'column_letter_1_filter') else None
         )
-        if not sheet_1_data:
-            raise ValueError(f"No data found in sheet 1 {self.column_letter_1}")
+
         sheet_2_data = self.get_data_from_google_sheet(sheet_id=self.sheet_2_id, 
             column_letter=self.column_letter_2,
             column_condition_letter = self.column_letter_2_filter if hasattr(self, 'column_letter_2_filter') else None
         )
-        if not sheet_2_data:
-            raise ValueError(f"No data found in sheet 2 {self.column_letter_2}")
-        
-        sheet_1_data_filtered = self._filter_four_digit_cells(sheet_1_data)
-        sheet_2_data_filtered = self._filter_four_digit_cells(sheet_2_data)
-        
+
+        sheet_1_data_filtered = []
+        sheet_2_data_filtered = []
+        if sheet_1_data:
+            sheet_1_data_filtered = self._filter_four_digit_cells(sheet_1_data)
+        if sheet_2_data:
+            sheet_2_data_filtered = self._filter_four_digit_cells(sheet_2_data)
+
+        if not sheet_1_data_filtered and not sheet_2_data_filtered:
+            raise ValueError("No data found in sheet 1 or sheet 2")
+
         merged_set = set(sheet_1_data_filtered) | set(sheet_2_data_filtered)
         return sorted(list(merged_set)) 
 

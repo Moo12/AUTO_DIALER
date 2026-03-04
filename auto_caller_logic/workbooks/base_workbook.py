@@ -23,8 +23,10 @@ class ExcelToGoogleWorkbook(ABC):
 
         date_str = datetime.now().strftime("%d.%m.%Y")
         time_str = datetime.now().strftime("%H.%M")
-        
-        self.output_file_name = self.excel_file_pattern.format(date=date_str, time=time_str)
+        # Only substitute {date} and {time}; leave {counter}, {num_of_customers}, etc. for run() to fill
+        self.output_file_name = (
+            self.excel_file_pattern.replace("{date}", date_str).replace("{time}", time_str)
+        )
     
     def post_excel_file_creation(self, **kwargs):
         """
