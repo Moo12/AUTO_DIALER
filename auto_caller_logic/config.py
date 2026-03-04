@@ -21,6 +21,8 @@ class Config:
     GOOGLE_DRIVE_CONFIG_KEY = 'google_drive'
     PAYCALL_CONFIG_KEY = 'paycall'
     OUTPUT_CONFIG_KEY = 'output'
+    DELAYED_GAPS_CHECK_KEY = 'delayed_gaps_check'
+
     """
     Configuration manager for dial file generator.
     
@@ -732,6 +734,35 @@ class Config:
         """
         config = self.get_config()
         return config.get('files', {}).get(module_name, {}).get('output', {})
+
+    def get_delayed_gaps_check_config(self) -> Dict[str, Any]:
+        """
+        Get delayed gaps check configuration (under files.gaps_actions).
+        Used to run a delayed task after enter-gaps that monitors a destination column.
+        """
+        config = self.get_config()
+        return config.get('files', {}).get('gaps_actions', {}).get(self.DELAYED_GAPS_CHECK_KEY, {})
+
+    def update_delayed_gaps_check_config(self, delayed_config: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Update delayed gaps check configuration.
+        Merges with existing config; new values override.
+        """
+        if not isinstance(delayed_config, dict):
+            raise ValueError("delayed_gaps_check_config must be a dictionary")
+        config = self._config_manager.get_config()
+        if 'files' not in config:
+            config['files'] = {}
+        if 'gaps_actions' not in config['files']:
+            config['files']['gaps_actions'] = {}
+        existing = config['files']['gaps_actions'].get(self.DELAYED_GAPS_CHECK_KEY, {})
+        if not isinstance(existing, dict):
+            existing = {}
+        merged = existing.copy()
+        merged.update(delayed_config)
+        config['files']['gaps_actions'][self.DELAYED_GAPS_CHECK_KEY] = merged
+        self._config_manager.save_config(config)
+        return merged
     
     def update_main_google_folder_id(self, main_google_folder_id: str) -> Dict[str, Any]:
         """

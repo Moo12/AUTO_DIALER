@@ -17,6 +17,7 @@ from .config import _get_default_config
 from .filter_file import create_filter_google_manager
 from .customers_file import create_customers_google_manager
 from .gaps_actions_file import create_gaps_actions_google_manager
+from .delayed_gaps_check import schedule_delayed_gaps_check
 from .paycall_utils import get_paycall_data
 from .mail_service import create_mail_service
 from common_utils.gmail_service import GmailService
@@ -82,6 +83,7 @@ class ModifySettingsRequest(BaseModel):
     main_google_folder_id: Optional[str] = None  # Main Google folder ID to update
     gaps_sheet_config: Optional[Dict[str, Any]] = None  # Gaps sheet configuration to update
     mail_config: Optional[Dict[str, Any]] = None  # Mail configuration to update. Structure: {"<module>": {<mail_config>}}
+    delayed_gaps_check_config: Optional[Dict[str, Any]] = None  # Delayed task after enter-gaps: enabled, delay_minutes, destination_column_letter, mail_mode, mail
 
 class ModifySettingsResponse(BaseModel):
     success: bool
@@ -368,6 +370,26 @@ async def enter_gaps(request: EnterGapsRequest):
             raise ValueError("Post-process data is not available")
         
         print(f"Entered gaps: {len(request.callers_gap)} callers", file=sys.stderr)
+
+        config = _get_default_config(config_manager)
+        delayed_config = config.get_delayed_gaps_check_config()
+        if delayed_config.get("enabled"):
+            output_config = config.get_output_files_config("gaps_actions")
+            sheet_config = output_config.get("gaps_sheet_runs")
+            if sheet_config:
+                context = {
+                    "caller_id": request.caller_id,
+                    "time_str": request.time_str,
+                    "date_str": request.date_str,
+                    "nick_name": request.nick_name or "",
+                    "customers_file_name": request.customers_file_name,
+                }
+                config_path = str(config_manager.config_path)
+                schedule_delayed_gaps_check(
+                    delayed_config, sheet_config, context, config_path
+                )
+            else:
+                print("delayed_gaps_check: gaps_sheet_runs not in config, skip scheduling", file=sys.stderr)
         
         return EnterGapsResponse(
             success=True,
@@ -507,10 +529,10 @@ async def get_settings(settings_config: str = Query(..., description="JSON dicti
             print(f"Mail config str: {mail_config_str}", file=sys.stderr)
 
             config_response["mail-config"] = config.get_mail_config(mail_config_str)
-        else:
-            print("Mail config is not found", file=sys.stderr)
 
-                
+        if "delayed_gaps_check" in settings_config_dict:
+            config_response["delayed_gaps_check"] = config.get_delayed_gaps_check_config()
+ 
         return GetSettingsResponse(
             success=True,
             config_settings=config_response,
@@ -585,6 +607,12 @@ async def modify_settings(request: ModifySettingsRequest):
                 mail_config_response = config.update_mail_config(mail_config)
                 updated_items.append('mail_config')
                 config_response['mail_config'] = mail_config_response
+
+        if "delayed_gaps_check_config" in request_dict:
+            delayed_config = request_dict["delayed_gaps_check_config"]
+            if delayed_config is not None:
+                config_response["delayed_gaps_check_config"] = config.update_delayed_gaps_check_config(delayed_config)
+                updated_items.append("delayed_gaps_check_config")
         
         if not updated_items:
             return ModifySettingsResponse(
