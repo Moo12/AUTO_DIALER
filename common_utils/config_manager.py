@@ -63,6 +63,7 @@ class ConfigManager:
         Returns:
             Dictionary containing the full configuration
         """
+        self.load()
         return self.config
     
     def save_config(self, config: Dict[str, Any]) -> None:
